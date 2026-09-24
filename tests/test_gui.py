@@ -31,7 +31,7 @@ class GuiImportTests(unittest.TestCase):
                 info = tarfile.TarInfo("backup/email/example.com/test/storage/m.1")
                 info.size = len(storage)
                 tf.addfile(info, BytesIO(storage))
-            window = Window()
+            window = Window(show_welcome=False)
             try:
                 window.open_source(archive)
                 deadline = time.monotonic() + 10

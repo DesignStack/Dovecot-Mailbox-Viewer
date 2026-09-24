@@ -13,6 +13,17 @@ pip install -r requirements.txt
 python -m viewer.app
 ```
 
+On startup, a welcome guide explains the two ways to open your mailbox:
+
+- **Open Archive**: choose the `.tar.gz` or `.tgz` backup file. There is no need to extract it first.
+- **Open Folder**: choose the extracted backup folder, such as `backup/email`.
+
+The guide explains how emails appear as the backup is prepared and that your original
+backup is never changed. Cancelling a file picker keeps the guide open. **Not now**
+closes the guide and leaves the same choices on the empty screen. Reopen it with
+**Help → Getting started**. It also returns when the current cache is cleared or an
+import fails before any mail is loaded.
+
 Choose **Open archive** or **Open folder**. A background task scans the mailbox and builds a local SQLite search index. Select folders on the left, messages in the middle, and read the message on the right. Search terms match subject, sender, recipients and plain-text message content. Use **All mail** to search across folders. The search options button adds sender, subject, date and attachment filters. Attachments also appear as cards below the message date, showing a file-type icon, filename and size. Click a card to save that file. Use the **three-dot menu** at the top right of an email to save attachments, export the original `.eml`, or download images. The top toolbar has Search options followed by Open archive and Open folder, all with matching outline icons. The app opens one mailbox at a time; a multi-account backup asks which mailbox to open. **Clear cache** removes derived copies and search indexes from your computer.
 
 HTML emails are displayed in the preview. Remote images are blocked by default;
@@ -60,6 +71,7 @@ before distributing it to others.
 - `viewer/mdbox.py` scans tar/folder inputs and yields validated message bytes and mailbox metadata.
 - `viewer/catalog.py` builds and queries a private SQLite catalogue and full-text index.
 - `viewer/app.py` contains the Qt interface and background import worker.
+- `viewer/welcome.py` provides the startup guide and empty-state opening choices.
 - `viewer/html_preview.py` handles safe HTML previews and the optional image requests.
 - `tests/test_mdbox.py` tests dbox records without using private email fixtures.
 - `viewer/icons.py` provides the original single-colour outline icons; `viewer/mail_widgets.py` paints folder and message rows.

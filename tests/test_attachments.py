@@ -31,7 +31,7 @@ class AttachmentTests(unittest.TestCase):
         message.add_attachment(b'second pdf', maintype='application', subtype='pdf', filename='proposal.pdf')
         message.add_attachment(b'spreadsheet', maintype='application', subtype='octet-stream', filename='Budget.XLSX')
         with tempfile.TemporaryDirectory() as temp:
-            window = Window()
+            window = Window(show_welcome=False)
             window.catalogue = Catalogue(Path(temp) / 'test.sqlite3')
             window.catalogue.reset()
             window.catalogue.add(Record('INBOX', message.as_bytes(), 'synthetic'))

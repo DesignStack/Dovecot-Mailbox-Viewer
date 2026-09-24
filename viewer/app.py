@@ -7,13 +7,13 @@ import logging
 from logging.handlers import RotatingFileHandler
 import time
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt, QUrl, QSize
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot, Qt, QUrl, QSize
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar, QSplitter, QInputDialog,
-    QToolButton, QVBoxLayout, QWidget,
+    QScrollArea, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
 from viewer.catalog import Catalogue, cache_path, describe, source_fingerprint
@@ -21,6 +21,7 @@ from viewer.html_preview import SafeHtmlPreview, MAX_IMAGES
 from viewer.icons import line_icon
 from viewer.mail_widgets import FolderDelegate, MessageDelegate, DETAILS_ROLE
 from viewer.attachments import AttachmentList, collect_attachments, suggested_filename
+from viewer.welcome import WelcomeDialog, WelcomePage
 from viewer.mdbox import discover, read_account
 from viewer.dovecot_index import read_statuses, SEEN, DELETED
 
@@ -141,7 +142,7 @@ class ImportWorker(QObject):
 
 
 class Window(QMainWindow):
-    def __init__(self):
+    def __init__(self, *, show_welcome=True):
         super().__init__()
         self.setWindowTitle("Dovecot Mailbox Viewer")
         self.setWindowIcon(app_icon())
@@ -155,6 +156,10 @@ class Window(QMainWindow):
         self.attachments = []
         self.search_options = {}
         self.shown_message = None
+        self.welcome_dialog = None
+        self._welcome_enabled = show_welcome
+        self._startup_welcome_scheduled = False
+        self._import_error_visible = False
 
         # Avoid a blanket QWidget background: it paints white rectangles behind
         # labels in coloured containers, including the remote-image notice.
@@ -227,6 +232,10 @@ class Window(QMainWindow):
         file_menu.addSeparator()
         file_menu.addActions([self.export_action, clear_cache, open_log])
         help_menu = self.menuBar().addMenu("Help")
+        self.getting_started_action = QAction(line_icon("mail"), "Getting started…", self)
+        self.getting_started_action.triggered.connect(self.show_welcome)
+        help_menu.addAction(self.getting_started_action)
+        help_menu.addSeparator()
         self.contact_action = QAction(line_icon("mail"), "Contact author", self)
         self.contact_action.triggered.connect(self.contact_author)
         self.about_action = QAction(line_icon("info"), "About", self)
@@ -394,7 +403,17 @@ class Window(QMainWindow):
         self.panes.setStretchFactor(0, 0)
         self.panes.setStretchFactor(1, 0)
         self.panes.setStretchFactor(2, 1)
-        outer.addWidget(self.panes, 1)
+        self.content_stack = QStackedWidget()
+        self.empty_page = WelcomePage()
+        self.empty_page.archive_requested.connect(self.open_archive)
+        self.empty_page.folder_requested.connect(self.open_folder)
+        self.empty_view = QScrollArea()
+        self.empty_view.setWidgetResizable(True)
+        self.empty_view.setFrameShape(QFrame.Shape.NoFrame)
+        self.empty_view.setWidget(self.empty_page)
+        self.content_stack.addWidget(self.empty_view)
+        self.content_stack.addWidget(self.panes)
+        outer.addWidget(self.content_stack, 1)
         self.setCentralWidget(container)
         self.activity = QLabel("Ready")
         self.activity.setStyleSheet("color: #8a929d; font-size: 11px; padding: 0 8px;")
@@ -407,6 +426,43 @@ class Window(QMainWindow):
         self.statusBar().addPermanentWidget(self.activity)
         self.statusBar().addPermanentWidget(self.progress_bar)
         self.statusBar().showMessage("Local, read-only backup viewer")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._welcome_enabled and not self._startup_welcome_scheduled:
+            self._startup_welcome_scheduled = True
+            # Let the main window appear first so its child dialog is centred
+            # correctly and accessible on startup. This never blocks the loop.
+            QTimer.singleShot(0, self._welcome_if_empty)
+
+    def _welcome_if_empty(self):
+        if self.isVisible() and self.catalogue is None and self.worker_thread is None and not self._import_error_visible:
+            self.show_welcome()
+
+    def show_welcome(self):
+        if self.worker_thread and self.worker_thread.isRunning():
+            self.statusBar().showMessage("Your mailbox is being prepared. Emails will appear as they are read.")
+            return
+        if self.welcome_dialog is None:
+            self.welcome_dialog = WelcomeDialog(self)
+            self.welcome_dialog.archive_requested.connect(self.open_archive)
+            self.welcome_dialog.folder_requested.connect(self.open_folder)
+        if self.welcome_dialog.isVisible():
+            self.welcome_dialog.activateWindow()
+            return
+        self.welcome_dialog.open()
+
+    def _opening_parent(self):
+        if self.welcome_dialog is not None and self.welcome_dialog.isVisible():
+            return self.welcome_dialog
+        return self
+
+    def _show_empty_page(self):
+        self.content_stack.setCurrentWidget(self.empty_view)
+        self.source_label.setText("Open a mailbox backup to get started")
+        self.source_label.setToolTip("")
+        if self._welcome_enabled:
+            QTimer.singleShot(0, self._welcome_if_empty)
 
     def _tool(self, label, icon, action=None):
         button = QToolButton()
@@ -512,33 +568,37 @@ class Window(QMainWindow):
             action.setEnabled(False)
 
     def open_archive(self):
-        name, _ = QFileDialog.getOpenFileName(self, "Open JetBackup archive", "", "Archives (*.tar.gz *.tgz)")
+        name, _ = QFileDialog.getOpenFileName(self._opening_parent(), "Choose your mailbox backup file", "", "Mailbox backups (*.tar.gz *.tgz)")
         if name:
-            self.open_source(Path(name))
+            return self.open_source(Path(name))
+        return False
 
     def open_folder(self):
-        name = QFileDialog.getExistingDirectory(self, "Open extracted mailbox backup")
+        name = QFileDialog.getExistingDirectory(self._opening_parent(), "Choose the extracted backup folder")
         if name:
-            self.open_source(Path(name))
+            return self.open_source(Path(name))
+        return False
 
     def open_source(self, source: Path):
         if self.worker_thread and self.worker_thread.isRunning():
             QMessageBox.information(self, "Indexing", "Please wait for indexing to finish.")
-            return
+            return False
         try:
             accounts = discover(source)
             if not accounts:
-                raise ValueError("No mdbox storage files (storage/m.*) were found.")
+                raise ValueError("No supported mailbox was found here. Choose a JetBackup/cPanel "
+                                 "mailbox archive (.tar.gz or .tgz), or its extracted backup folder. "
+                                 "If you selected a folder inside the backup, try the parent folder.")
         except Exception as exc:
-            QMessageBox.critical(self, "Cannot open backup", str(exc))
-            return
+            QMessageBox.critical(self._opening_parent(), "Cannot open backup", str(exc))
+            return False
         account = sorted(accounts)[0]
         if len(accounts) > 1:
             # There is one active mailbox. Select it once on opening a multi-
             # account backup instead of leaving a dropdown in the main window.
-            account, ok = QInputDialog.getItem(self, "Choose mailbox", "Open mailbox", sorted(accounts), 0, False)
+            account, ok = QInputDialog.getItem(self._opening_parent(), "Choose mailbox", "Open mailbox", sorted(accounts), 0, False)
             if not ok:
-                return
+                return False
         self.source, self.accounts, self.account_name = source, accounts, account
         self.mailbox_name.setText(account)
         self.mailbox_name.setTextFormat(Qt.TextFormat.PlainText)
@@ -550,13 +610,16 @@ class Window(QMainWindow):
         self.search.blockSignals(False)
         self.search_options = {}
         logging.getLogger("viewer").info("Opened source: %s; account: %s", source, account)
-        self.load_account()
+        opened = self.load_account()
+        if opened and self.welcome_dialog is not None:
+            self.welcome_dialog.accept()
+        return opened
 
     def load_account(self, _=None):
         if not self.source or not self.account_name:
-            return
+            return False
         if self.worker_thread and self.worker_thread.isRunning():
-            return
+            return False
         if self.catalogue:
             self.catalogue.close()
             self.catalogue = None
@@ -568,8 +631,9 @@ class Window(QMainWindow):
         try:
             fingerprint = source_fingerprint(self.source, self.accounts[account])
         except OSError as exc:
-            QMessageBox.critical(self, "Cannot open backup", str(exc))
-            return
+            QMessageBox.critical(self._opening_parent(), "Cannot open backup", str(exc))
+            self._show_empty_page()
+            return False
         try:
             cached = Catalogue(database)
             if cached.reusable(fingerprint):
@@ -577,7 +641,7 @@ class Window(QMainWindow):
                 self.import_done(cached.count())
                 self.activity.setText(f"Ready · {cached.count()} messages (cached)")
                 self.progress_bar.hide()
-                return
+                return True
             cached.close()
         except Exception:
             logging.getLogger("viewer").exception("Cache check failed; rebuilding")
@@ -600,13 +664,17 @@ class Window(QMainWindow):
         self.worker.failed.connect(self.worker_thread.quit)
         self.worker_thread.finished.connect(self.worker.deleteLater)
         self.worker_thread.finished.connect(self.thread_finished)
+        self.content_stack.setCurrentWidget(self.panes)
         self.worker_thread.start()
+        return True
 
     @Slot()
     def thread_finished(self):
         self.worker = None
         self.worker_thread.deleteLater()
         self.worker_thread = None
+        if self.catalogue is None:
+            self._show_empty_page()
 
     @Slot(int, int)
     def update_progress(self, percent, count):
@@ -630,6 +698,7 @@ class Window(QMainWindow):
         self.populate_folders(count)
 
     def populate_folders(self, count):
+        self.content_stack.setCurrentWidget(self.panes)
         current = self.folders.currentItem()
         selected = current.data(Qt.ItemDataRole.UserRole) if current else None
         self.folders.blockSignals(True)
@@ -661,7 +730,13 @@ class Window(QMainWindow):
         self.activity.setText("Import failed · see File → Open diagnostic log")
         self.heading.setText("Unable to index this backup")
         self.statusBar().showMessage("Import failed")
-        QMessageBox.critical(self, "Import failed", f"{error}\n\nDiagnostic log: {log_path()}")
+        self._import_error_visible = True
+        try:
+            QMessageBox.critical(self, "Import failed", f"{error}\n\nDiagnostic log: {log_path()}")
+        finally:
+            self._import_error_visible = False
+        if self._welcome_enabled:
+            QTimer.singleShot(0, self._welcome_if_empty)
 
     def open_log(self):
         target = log_path()
@@ -810,6 +885,11 @@ class Window(QMainWindow):
         self.reset_preview("Search cache cleared")
         self.folder_title.setText("All mail")
         self.message_count.clear()
+        self.source = None
+        self.account_name = ""
+        self.mailbox_name.setText("Mailboxes")
+        self.activity.setText("Ready")
+        self._show_empty_page()
         self.statusBar().showMessage("Cache removed; original backup unchanged")
 
     def closeEvent(self, event):
@@ -819,6 +899,8 @@ class Window(QMainWindow):
             return
         if self.catalogue:
             self.catalogue.close()
+        if self.welcome_dialog is not None:
+            self.welcome_dialog.reject()
         self.reset_preview()
         event.accept()
 

@@ -115,7 +115,8 @@ class ImageDownloads(unittest.TestCase):
         preview.close()
 
     def test_failure_stays_visible_and_retry_and_menu_use_same_handler(self):
-        window = Window()
+        window = Window(show_welcome=False)
+        window.content_stack.setCurrentWidget(window.panes)
         window.show()
         url = self.base + '/missing'
         window.preview.display(f'<img src="{url}">', EmailMessage())
@@ -148,7 +149,8 @@ class ImageDownloads(unittest.TestCase):
         preview.close()
 
     def test_total_deadline_stops_dripping_response_but_keeps_loaded_image(self):
-        window = Window()
+        window = Window(show_welcome=False)
+        window.content_stack.setCurrentWidget(window.panes)
         window.show()
         window.preview.image_deadline_ms = 700
         fast = self.base + '/image.png'
@@ -168,7 +170,8 @@ class ImageDownloads(unittest.TestCase):
         window.close()
 
     def test_deadline_and_stop_work_before_response_headers(self):
-        window = Window()
+        window = Window(show_welcome=False)
+        window.content_stack.setCurrentWidget(window.panes)
         window.show()
         self.release_slow.clear()
         self.slow_started.clear()
