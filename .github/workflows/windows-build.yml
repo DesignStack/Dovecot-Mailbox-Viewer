@@ -1,0 +1,23 @@
+name: Build Windows app
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build and test
+        shell: pwsh
+        run: ./build-windows.ps1
+      - name: Upload executable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DesignStack-Dovecot-Mailbox-Viewer-Windows
+          path: DesignStack-Dovecot-Mailbox-Viewer-Windows.zip

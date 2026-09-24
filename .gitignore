@@ -1,0 +1,17 @@
+# Never commit mailbox data or local search caches.
+*.tar.gz
+*.tgz
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Python, Windows builds and editor files.
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.spec
+DesignStack-Dovecot-Mailbox-Viewer-Windows.zip
+.idea/
+.vscode/
