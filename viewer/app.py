@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import logging
 from logging.handlers import RotatingFileHandler
-import traceback
+import time
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
@@ -30,6 +30,10 @@ def configure_logging():
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logging.getLogger("viewer").addHandler(handler)
     logging.getLogger("viewer").setLevel(logging.INFO)
+    def log_uncaught(exc_type, exc_value, exc_traceback):
+        logging.getLogger("viewer").error("Unhandled application error", exc_info=(exc_type, exc_value, exc_traceback))
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+    sys.excepthook = log_uncaught
 
 
 class ImportWorker(QObject):
@@ -50,11 +54,15 @@ class ImportWorker(QObject):
             for folder in sorted(self.info["folders"]):
                 catalogue.add_folder(folder)
             count = 0
+            last_percent, last_update = -1, 0.0
             for record in read_account(self.source, self.info):
                 catalogue.add(record)
                 count += 1
                 percent = min(99, int(100 * record.bytes_done / max(1, record.bytes_total)))
-                self.progress.emit(percent, count)
+                now = time.monotonic()
+                if percent != last_percent or now - last_update >= 0.5:
+                    self.progress.emit(percent, count)
+                    last_percent, last_update = percent, now
                 if count % 25 == 0:
                     catalogue.commit()
             catalogue.commit()
@@ -202,6 +210,7 @@ class Window(QMainWindow):
             QMessageBox.critical(self, "Cannot open backup", str(exc))
             return
         self.source, self.accounts = source, accounts
+        logging.getLogger("viewer").info("Opened source: %s; accounts: %s", source, ", ".join(accounts))
         self.account.blockSignals(True)
         self.account.clear()
         self.account.addItems(sorted(accounts))
@@ -227,6 +236,7 @@ class Window(QMainWindow):
         self.statusBar().showMessage(f"Reading {account} · original backup remains untouched")
         self.worker_thread = QThread(self)
         self.pending_database = database
+        logging.getLogger("viewer").info("Starting worker for %s", account)
         self.worker = ImportWorker(self.source, account, self.accounts[account], database)
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
