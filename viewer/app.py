@@ -16,9 +16,10 @@ from PySide6.QtWidgets import (
     QStyle, QToolButton, QVBoxLayout, QWidget,
 )
 
-from viewer.catalog import Catalogue, cache_path, describe
+from viewer.catalog import Catalogue, cache_path, describe, source_fingerprint
 from viewer.html_preview import SafeHtmlPreview
 from viewer.mdbox import discover, read_account
+from viewer.dovecot_index import read_statuses, SEEN, DELETED
 
 
 def log_path() -> Path:
@@ -104,12 +105,13 @@ class SearchDialog(QDialog):
 
 class ImportWorker(QObject):
     progress = Signal(int, int)  # percentage, message count
+    batch = Signal(int)
     completed = Signal(int)
     failed = Signal(str)
 
-    def __init__(self, source: Path, account: str, info: dict, database: Path):
+    def __init__(self, source: Path, account: str, info: dict, database: Path, fingerprint: str):
         super().__init__()
-        self.source, self.account, self.info, self.database = source, account, info, database
+        self.source, self.account, self.info, self.database, self.fingerprint = source, account, info, database, fingerprint
 
     def run(self):
         catalogue = None
@@ -119,19 +121,25 @@ class ImportWorker(QObject):
             catalogue.reset()
             for folder in sorted(self.info["folders"]):
                 catalogue.add_folder(folder)
+            statuses = read_statuses(self.source, self.info)
             count = 0
+            last_commit = time.monotonic()
             last_percent, last_update = -1, 0.0
             for record in read_account(self.source, self.info):
-                catalogue.add(record)
+                match = statuses.get(record.guid) if record.guid else None
+                catalogue.add(record, match[1] if match else None)
                 count += 1
                 percent = min(99, int(100 * record.bytes_done / max(1, record.bytes_total)))
                 now = time.monotonic()
                 if percent != last_percent or now - last_update >= 0.5:
                     self.progress.emit(percent, count)
                     last_percent, last_update = percent, now
-                if count % 25 == 0:
+                if count == 1 or count % 25 == 0 or now - last_commit >= 0.5:
                     catalogue.commit()
-            catalogue.commit()
+                    self.batch.emit(count)
+                    last_commit = now
+            catalogue.finish(self.fingerprint)
+            self.batch.emit(count)
             logging.getLogger("viewer").info("Import complete: %s messages (%s)", count, self.account)
             self.completed.emit(count)
         except Exception as exc:
@@ -184,7 +192,9 @@ class Window(QMainWindow):
         open_log = QAction("Open diagnostic log", self)
         open_log.triggered.connect(self.open_log)
         file_menu = self.menuBar().addMenu("File")
-        file_menu.addActions([open_archive, open_folder, clear_cache, open_log])
+        export_action = QAction("Export selected email as .eml…", self)
+        export_action.triggered.connect(self.export_eml)
+        file_menu.addActions([open_archive, open_folder, export_action, clear_cache, open_log])
 
         container = QWidget()
         outer = QVBoxLayout(container)
@@ -268,7 +278,11 @@ class Window(QMainWindow):
         right_layout.addWidget(self.details)
         right_layout.addWidget(self.image_notice)
         right_layout.addWidget(self.preview, 1)
+        self.export_button = QPushButton("Export email as .eml…")
+        self.export_button.setEnabled(False)
+        self.export_button.clicked.connect(self.export_eml)
         right_layout.addWidget(self.save_button)
+        right_layout.addWidget(self.export_button)
         panes.addWidget(right)
         panes.setSizes([240, 360, 780])
         outer.addWidget(panes, 1)
@@ -336,6 +350,18 @@ class Window(QMainWindow):
         database = cache_path(self.source, account)
         self.folders.clear()
         self.listing.clear()
+        try:
+            fingerprint = source_fingerprint(self.source, self.accounts[account])
+            cached = Catalogue(database)
+            if cached.reusable(fingerprint):
+                self.catalogue = cached
+                self.import_done(cached.count())
+                self.activity.setText(f"Ready · {cached.count()} messages (cached)")
+                self.progress_bar.hide()
+                return
+            cached.close()
+        except Exception:
+            logging.getLogger("viewer").exception("Cache check failed; rebuilding")
         self.heading.setText("Indexing…")
         self.activity.setText(f"Preparing {account}…")
         self.progress_bar.setValue(0)
@@ -344,10 +370,11 @@ class Window(QMainWindow):
         self.worker_thread = QThread(self)
         self.pending_database = database
         logging.getLogger("viewer").info("Starting worker for %s", account)
-        self.worker = ImportWorker(self.source, account, self.accounts[account], database)
+        self.worker = ImportWorker(self.source, account, self.accounts[account], database, fingerprint)
         self.worker.moveToThread(self.worker_thread)
         self.worker_thread.started.connect(self.worker.run)
         self.worker.progress.connect(self.update_progress)
+        self.worker.batch.connect(self.import_batch)
         self.worker.completed.connect(self.import_done)
         self.worker.failed.connect(self.import_failed)
         self.worker.completed.connect(self.worker_thread.quit)
@@ -369,10 +396,24 @@ class Window(QMainWindow):
         self.statusBar().showMessage(f"Indexing {percent}% · {count} messages")
 
     @Slot(int)
+    def import_batch(self, count):
+        if self.catalogue is None:
+            self.catalogue = Catalogue(self.pending_database)
+        self.populate_folders(count)
+
+    @Slot(int)
     def import_done(self, count):
         self.progress_bar.setValue(100)
         self.activity.setText(f"Ready · {count} messages indexed")
-        self.catalogue = Catalogue(self.pending_database)
+        if self.catalogue is None:
+            self.catalogue = Catalogue(self.pending_database)
+        self.populate_folders(count)
+
+    def populate_folders(self, count):
+        current = self.folders.currentItem()
+        selected = current.data(Qt.ItemDataRole.UserRole) if current else None
+        self.folders.blockSignals(True)
+        self.folders.clear()
         all_item = QListWidgetItem(f"  ✉   All mail  ({count})")
         self.folders.addItem(all_item)
         folder_rows = sorted(self.catalogue.folders(), key=lambda row: (
@@ -383,7 +424,11 @@ class Window(QMainWindow):
             item = QListWidgetItem(f"  {icon}   {folder_name}  ({row['count']})")
             item.setData(Qt.ItemDataRole.UserRole, folder_name)
             self.folders.addItem(item)
-        self.folders.setCurrentRow(0)
+        chosen = next((i for i in range(self.folders.count()) if self.folders.item(i).data(
+            Qt.ItemDataRole.UserRole) == selected), 0)
+        self.folders.setCurrentRow(chosen)
+        self.folders.blockSignals(False)
+        self.refresh_messages()
         self.statusBar().showMessage(f"{count} messages indexed · {self.account.currentText()}")
 
     @Slot(str)
@@ -411,6 +456,8 @@ class Window(QMainWindow):
         except Exception as exc:
             self.statusBar().showMessage(f"Search error: {exc}")
             return
+        previous = self.listing.currentItem()
+        selected_id = previous.data(Qt.ItemDataRole.UserRole) if previous else None
         self.listing.blockSignals(True)
         self.listing.clear()
         for row in rows:
@@ -421,11 +468,19 @@ class Window(QMainWindow):
                 shown_date = ""
             snippet = " ".join((row["body"] or "").split())[:130]
             attachment = "  📎" if row["has_attachment"] else ""
-            item = QListWidgetItem(f"{sender[:27]}{attachment}    {shown_date}\n{row['subject'] or '(No subject)'}\n{snippet}")
+            marker = "● " if row["status"] is not None and not row["status"] & SEEN else ""
+            marker += " [Deleted]" if row["status"] is not None and row["status"] & DELETED else ""
+            marker += " [Expunged]" if row["expunged"] else ""
+            item = QListWidgetItem(f"{marker}{sender[:27]}{attachment}    {shown_date}\n{row['subject'] or '(No subject)'}\n{snippet}")
             item.setData(Qt.ItemDataRole.UserRole, row["id"])
             item.setToolTip(f"{row['date']} · {row['folder']}")
             item.setSizeHint(QSize(290, 78))
             self.listing.addItem(item)
+        if selected_id is not None:
+            for index in range(self.listing.count()):
+                if self.listing.item(index).data(Qt.ItemDataRole.UserRole) == selected_id:
+                    self.listing.setCurrentRow(index)
+                    break
         self.listing.blockSignals(False)
         self.statusBar().showMessage(f"Showing {len(rows)} messages" + (" (first 5,000)" if len(rows) == 5000 else ""))
 
@@ -452,6 +507,24 @@ class Window(QMainWindow):
         self.attachments = [p for p in msg.walk() if not p.is_multipart() and (p.get_filename() or p.get_content_disposition() == "attachment")]
         self.save_button.setText(f"Save attachment… ({len(self.attachments)})")
         self.save_button.setEnabled(bool(self.attachments))
+        self.export_button.setEnabled(True)
+
+    def export_eml(self):
+        item = self.listing.currentItem()
+        if not item or not self.catalogue:
+            return
+        row = self.catalogue.message(item.data(Qt.ItemDataRole.UserRole))
+        if row is None:
+            return
+        import re
+        filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', row['subject'] or 'message')[:100].strip(' .') or 'message'
+        destination, _ = QFileDialog.getSaveFileName(self, 'Export email', filename + '.eml', 'Email files (*.eml)')
+        if destination:
+            try:
+                Path(destination).write_bytes(row['raw'])
+                self.statusBar().showMessage(f"Exported {destination}")
+            except OSError as exc:
+                QMessageBox.critical(self, 'Export failed', str(exc))
 
     def save_attachment(self):
         if not self.attachments:

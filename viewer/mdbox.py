@@ -23,6 +23,7 @@ class Record:
     source: str
     bytes_done: int = 0
     bytes_total: int = 0
+    guid: bytes | None = None
 
 
 def _root_parts(parts: tuple[str, ...]) -> tuple[str, ...] | None:
@@ -108,7 +109,12 @@ def records(stream, source: str):
                 break
             if field[:1] in (b"B", b"R", b"G", b"V", b"Z"):
                 attributes[field[:1]] = field[1:].strip().decode("utf-8", "replace")
-        yield Record(attributes.get(b"B") or "Unfiled", raw, source)
+        guid_text = attributes.get(b"G", "")
+        try:
+            guid = bytes.fromhex(guid_text) if len(guid_text) == 32 else None
+        except ValueError:
+            guid = None
+        yield Record(attributes.get(b"B") or "Unfiled", raw, source, guid=guid)
 
 
 def read_account(path: Path, info: dict):

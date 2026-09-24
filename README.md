@@ -62,3 +62,23 @@ before distributing it to others.
 - `tests/test_gui.py` checks the background import and GUI thread handoff.
 
 Do not commit client email archives or generated cache folders to GitHub.
+
+### Progressive viewing and cache
+
+Messages appear as storage records are parsed and committed, while indexing continues.
+The percentage describes bytes read from the mailbox storage files; reading a compressed
+archive and discovering accounts may take time before this progress starts. A completed
+index opens immediately on the next launch if the source path, size and modification
+time match. **File → Clear current cache** removes the local catalogue and causes a
+rebuild next time the account is opened. For extracted folders, changes to any file
+invalidate the cache. Email content and search terms remain in a private local SQLite
+cache; delete it via the menu if the backup contains sensitive mail.
+
+The app reads supported Dovecot transaction logs and matches GUIDs with stored messages
+to display seen, deleted and expunged state. A filled circle marks known unread mail.
+When an index cannot establish a message's status, the app leaves it unmarked rather
+than claiming it is unread. Main index snapshots and older transaction log formats are
+not yet supported; those backups may show unknown flags. Expunged messages still present
+in storage are displayed with an Expunged label for recovery. Export the selected email
+with **File → Export selected email as .eml…** or the preview button; it writes the
+original message bytes.
