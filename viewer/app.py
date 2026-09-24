@@ -20,6 +20,7 @@ from viewer.catalog import Catalogue, cache_path, describe, source_fingerprint
 from viewer.html_preview import SafeHtmlPreview, MAX_IMAGES
 from viewer.icons import line_icon
 from viewer.mail_widgets import FolderDelegate, MessageDelegate, DETAILS_ROLE
+from viewer.attachments import AttachmentList, collect_attachments, suggested_filename
 from viewer.mdbox import discover, read_account
 from viewer.dovecot_index import read_statuses, SEEN, DELETED
 
@@ -225,6 +226,12 @@ class Window(QMainWindow):
         file_menu.addActions([open_archive, open_folder])
         file_menu.addSeparator()
         file_menu.addActions([self.export_action, clear_cache, open_log])
+        help_menu = self.menuBar().addMenu("Help")
+        self.contact_action = QAction(line_icon("mail"), "Contact author", self)
+        self.contact_action.triggered.connect(self.contact_author)
+        self.about_action = QAction(line_icon("info"), "About", self)
+        self.about_action.triggered.connect(self.show_about)
+        help_menu.addActions([self.contact_action, self.about_action])
         search_action = QAction("Search mail…", self)
         search_action.setShortcut("Ctrl+F")
         search_action.triggered.connect(self.show_search)
@@ -358,6 +365,10 @@ class Window(QMainWindow):
         sender_row.addLayout(sender_info, 1)
         card_layout.addLayout(sender_row)
 
+        self.attachment_cards = AttachmentList()
+        self.attachment_cards.save_requested.connect(self.save_attachment_at)
+        card_layout.addWidget(self.attachment_cards)
+
         self.image_notice = QFrame()
         self.image_notice.setObjectName("imageNotice")
         notice_layout = QHBoxLayout(self.image_notice)
@@ -370,7 +381,7 @@ class Window(QMainWindow):
         self.images_link.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse |
                                                Qt.TextInteractionFlag.LinksAccessibleByKeyboard)
         self.images_link.setOpenExternalLinks(False)
-        self.images_link.linkActivated.connect(self.download_images)
+        self.images_link.linkActivated.connect(self.image_link_clicked)
         notice_layout.addWidget(self.images_link)
         self.image_notice.hide()
         card_layout.addWidget(self.image_notice)
@@ -415,9 +426,47 @@ class Window(QMainWindow):
             self.search.setText(self.search_options.pop("query"))
             self.refresh_messages()
 
+    def contact_author(self):
+        QDesktopServices.openUrl(QUrl("mailto:hello@designstack.co.uk"))
+
+    def show_about(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("About Dovecot Mailbox Viewer")
+        dialog.setFixedWidth(440)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 24, 24, 20)
+        layout.setSpacing(16)
+        icon = QLabel()
+        icon.setPixmap(app_icon().pixmap(40, 40))
+        layout.addWidget(icon)
+        title = QLabel("Dovecot Mailbox Viewer")
+        title.setStyleSheet("font-size: 19px; font-weight: 600;")
+        layout.addWidget(title)
+        description = QLabel("A local, read-only viewer for Dovecot mdbox backups from JetBackup and cPanel. "
+                             "Browse and search emails, save attachments and export messages as .eml files. "
+                             "Your original backup is never changed.")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+        credit = QLabel('Created by <a href="https://designstack.co.uk" '
+                        'style="color:#357ddb; text-decoration:underline">DesignStack</a>')
+        credit.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse |
+                                      Qt.TextInteractionFlag.LinksAccessibleByKeyboard)
+        credit.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
+        layout.addWidget(credit)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
+
     def download_images(self, _=None):
         if self.preview.remote_urls:
             self.preview.load_images()
+
+    def image_link_clicked(self, action):
+        if action == "stop":
+            self.preview.cancel_images()
+        else:
+            self.download_images()
 
     def update_image_notice(self):
         total = min(MAX_IMAGES, len(self.preview.remote_urls))
@@ -427,22 +476,33 @@ class Window(QMainWindow):
         self.images_action.setEnabled(total > loaded and not pending)
         self.images_action.setText("Download images")
         self.image_notice.setVisible(total > loaded)
-        self.images_link.setVisible(not pending)
+        self.images_link.show()
         if pending:
             self.notice_text.setText(f"Downloading images… {loaded} of {total} loaded")
         elif failed:
-            self.notice_text.setText(f"{failed} image(s) could not be downloaded. See File → Open diagnostic log for details.")
+            errors = self.preview.failed_images.values()
+            if all("timed out" in error for error in errors):
+                reason = f"{failed} timed out."
+            elif all("stopped" in error for error in errors):
+                reason = "Remaining downloads stopped."
+            else:
+                reason = f"{failed} could not be downloaded."
+            self.notice_text.setText(f"{loaded} of {total} images loaded. {reason}")
+            self.notice_text.setToolTip("See File → Open diagnostic log for download details.")
         else:
             self.notice_text.setText("Remote images are blocked to protect your privacy.")
-        label = "Try again" if failed else "Download images"
-        self.images_link.setText(f'<a href="download" style="color:#786027; text-decoration:underline">{label}</a>')
+            self.notice_text.setToolTip("")
+        label = "Stop" if pending else ("Try again" if failed else "Download images")
+        action = "stop" if pending else "download"
+        self.images_link.setText(f'<a href="{action}" style="color:#786027; text-decoration:underline">{label}</a>')
         if total and loaded == total:
-            self.statusBar().showMessage(f"{loaded} images downloaded", 5000)
+            self.statusBar().showMessage(f"All {loaded} images loaded", 10000)
 
     def reset_preview(self, title="Select an email to read"):
         from email.message import EmailMessage
         self.shown_message = None
         self.attachments = []
+        self.attachment_cards.set_attachments([])
         self.heading.setText(title)
         self.sender_label.clear()
         self.details.clear()
@@ -684,7 +744,8 @@ class Window(QMainWindow):
         else:
             from html import escape
             self.preview.display(f"<pre style='white-space:pre-wrap'>{escape(plain or '(No readable text body)')}</pre>", msg)
-        self.attachments = [p for p in msg.walk() if not p.is_multipart() and (p.get_filename() or p.get_content_disposition() == "attachment")]
+        self.attachments = collect_attachments(msg)
+        self.attachment_cards.set_attachments(self.attachments)
         self.attachment_action.setText(f"Save attachment… ({len(self.attachments)})" if self.attachments else "Save attachment…")
         self.attachment_action.setEnabled(bool(self.attachments))
         self.export_action.setEnabled(True)
@@ -709,16 +770,28 @@ class Window(QMainWindow):
     def save_attachment(self):
         if not self.attachments:
             return
-        names = [p.get_filename() or f"attachment-{i+1}" for i, p in enumerate(self.attachments)]
-        from PySide6.QtWidgets import QInputDialog
+        if len(self.attachments) == 1:
+            self.save_attachment_at(0)
+            return
+        # Number the choices so duplicate filenames remain individually selectable.
+        names = [f"{i+1}. {attachment.filename}" for i, attachment in enumerate(self.attachments)]
         selected, ok = QInputDialog.getItem(self, "Choose attachment", "Attachment", names, 0, False)
         if not ok:
             return
-        index = names.index(selected)
-        default = Path(selected).name.replace("/", "_").replace("\\", "_")
+        self.save_attachment_at(names.index(selected))
+
+    def save_attachment_at(self, index):
+        if not 0 <= index < len(self.attachments):
+            return
+        attachment = self.attachments[index]
+        default = suggested_filename(attachment.filename)
         destination, _ = QFileDialog.getSaveFileName(self, "Save attachment", default)
         if destination:
-            Path(destination).write_bytes(self.attachments[index].get_payload(decode=True) or b"")
+            try:
+                Path(destination).write_bytes(attachment.data)
+                self.statusBar().showMessage(f"Saved {attachment.filename}", 5000)
+            except OSError as exc:
+                QMessageBox.critical(self, "Cannot save attachment", str(exc))
 
     def clear_cache(self):
         if not self.source or not self.account_name:

@@ -3,13 +3,14 @@ from email.message import Message
 from html.parser import HTMLParser
 import logging
 
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QUrl, Signal
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QImage, QImageReader, QTextDocument
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import QMessageBox, QTextBrowser
 
 MAX_IMAGE_BYTES = 5_000_000
 MAX_IMAGES = 30
+IMAGE_DEADLINE_MS = 20_000
 LOGGER = logging.getLogger("viewer")
 
 
@@ -70,6 +71,7 @@ class SafeHtmlPreview(QTextBrowser):
         self.pending = set()
         self.active_replies = set()
         self.generation = 0
+        self.image_deadline_ms = IMAGE_DEADLINE_MS
         self.placeholder = QImage(1, 1, QImage.Format.Format_ARGB32)
         self.placeholder.fill(0)
 
@@ -130,7 +132,26 @@ class SafeHtmlPreview(QTextBrowser):
             generation = self.generation
             reply.readyRead.connect(lambda r=reply, b=data: self._read_image(r, b))
             reply.finished.connect(lambda r=reply, u=url, g=generation, b=data: self._image_finished(r, u, g, b))
+            # Qt's transfer timeout measures inactivity, not total duration.
+            # Start this deadline now so redirects, DNS and queued requests are
+            # also bounded. Parenting it to the reply prevents stale callbacks.
+            deadline = QTimer(reply)
+            deadline.setSingleShot(True)
+            deadline.timeout.connect(lambda r=reply, g=generation: self._image_timed_out(r, g))
+            reply.finished.connect(deadline.stop)
+            deadline.start(self.image_deadline_ms)
         self.images_changed.emit()
+
+    def _image_timed_out(self, reply, generation):
+        if generation == self.generation and reply in self.active_replies:
+            reply.setProperty("downloadError", "Image download timed out")
+            reply.abort()
+
+    def cancel_images(self):
+        """Stop pending requests while retaining images that already loaded."""
+        for reply in tuple(self.active_replies):
+            reply.setProperty("downloadError", "Image download stopped")
+            reply.abort()
 
     @staticmethod
     def _read_image(reply, data):
@@ -147,7 +168,7 @@ class SafeHtmlPreview(QTextBrowser):
             reply.deleteLater()
             return
         self.pending.discard(url)
-        error = reply.errorString()
+        error = reply.property("downloadError") or reply.errorString()
         image = QImage()
         if reply.error() == QNetworkReply.NetworkError.NoError:
             self._read_image(reply, data)

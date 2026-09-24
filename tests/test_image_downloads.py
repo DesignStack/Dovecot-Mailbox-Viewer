@@ -5,7 +5,7 @@ import threading
 import time
 import unittest
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QUrl
+from PySide6.QtCore import QBuffer, QCoreApplication, QEvent, QIODevice, QUrl
 from PySide6.QtGui import QColor, QImage, QTextDocument
 from PySide6.QtWidgets import QApplication
 
@@ -47,7 +47,14 @@ class ImageDownloads(unittest.TestCase):
                 self.send_header('Content-Length', str(len(cls.png)))
                 self.end_headers()
                 try:
-                    self.wfile.write(cls.png)
+                    if self.path == '/drip':
+                        # Regular data defeats an inactivity-only timeout.
+                        for byte in cls.png:
+                            self.wfile.write(bytes([byte]))
+                            self.wfile.flush()
+                            time.sleep(0.04)
+                    else:
+                        self.wfile.write(cls.png)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
@@ -65,6 +72,13 @@ class ImageDownloads(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         cls.thread.join()
+
+    def tearDown(self):
+        # Dispose Qt objects on the GUI thread, before the HTTP server thread can
+        # become the thread that triggers Python's cyclic garbage collector.
+        for widget in QApplication.topLevelWidgets():
+            widget.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def wait_until(self, predicate):
         deadline = time.monotonic() + 5
@@ -132,3 +146,45 @@ class ImageDownloads(unittest.TestCase):
         self.assertFalse(preview.remote_images)
         self.assertFalse(preview.failed_images)
         preview.close()
+
+    def test_total_deadline_stops_dripping_response_but_keeps_loaded_image(self):
+        window = Window()
+        window.show()
+        window.preview.image_deadline_ms = 700
+        fast = self.base + '/image.png'
+        drip = self.base + '/drip'
+        window.preview.display(f'<img src="{fast}"><img src="{drip}">', EmailMessage())
+        started = time.monotonic()
+        window.images_action.trigger()
+        self.assertIn('Stop', window.images_link.text())
+        self.wait_until(lambda: not window.preview.pending)
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertIn(fast, window.preview.remote_images)
+        self.assertIn('timed out', window.preview.failed_images[drip])
+        self.assertIn('1 of 2', window.notice_text.text())
+        self.assertIn('timed out', window.notice_text.text())
+        self.assertIn('Try again', window.images_link.text())
+        self.assertFalse(window.preview.active_replies)
+        window.close()
+
+    def test_deadline_and_stop_work_before_response_headers(self):
+        window = Window()
+        window.show()
+        self.release_slow.clear()
+        self.slow_started.clear()
+        url = self.base + '/slow'
+        window.preview.image_deadline_ms = 300
+        window.preview.display(f'<img src="{url}">', EmailMessage())
+        window.images_action.trigger()
+        self.wait_until(self.slow_started.is_set)
+        self.wait_until(lambda: not window.preview.pending)
+        self.assertIn('timed out', window.notice_text.text())
+        # A retry gets its own deadline, and Stop must cancel immediately.
+        window.preview.image_deadline_ms = 20_000
+        window.images_link.linkActivated.emit('download')
+        self.assertTrue(window.preview.pending)
+        window.images_link.linkActivated.emit('stop')
+        self.assertFalse(window.preview.pending)
+        self.assertIn('stopped', window.notice_text.text())
+        self.release_slow.set()
+        window.close()

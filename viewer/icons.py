@@ -26,6 +26,17 @@ PATHS = {
     "image": '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="1.5"/><path d="m3 17 6-6 4 4 3-3 5 5"/>',
     "log": '<path d="M6 3h12v18H6ZM9 7h6M9 11h6M9 15h4"/>',
     "refresh": '<path d="M20 8a8 8 0 1 0 0 8M20 3v5h-5"/>',
+    "download": '<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>',
+    "info": '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.1"/>',
+    "file": '<path d="M5 2h9l5 5v15H5ZM14 2v6h5"/>',
+    "file_word": '<path d="M5 2h9l5 5v15H5ZM14 2v6h5M8 12l1 6 3-4 3 4 1-6"/>',
+    "file_sheet": '<path d="M5 2h9l5 5v15H5ZM14 2v6h5M8 11h8v8H8ZM8 15h8M12 11v8"/>',
+    "file_pdf": '<path d="M5 2h9l5 5v15H5ZM14 2v6h5M9 19v-8h3a2 2 0 0 1 0 4H9"/>',
+    "file_slides": '<path d="M5 2h9l5 5v15H5ZM14 2v6h5M8 11h8v6H8ZM12 17v2m-2 0h4"/>',
+    "file_zip": '<path d="M5 2h9l5 5v15H5ZM14 2v6h5M10 5h2m0 3h-2m0 3h2m0 3h-2m0 3h2v2h-2Z"/>',
+    "file_audio": '<path d="M5 2h9l5 5v15H5ZM14 2v6h5M13 17v-6l3 1"/><circle cx="11" cy="17" r="2"/>',
+    "file_video": '<path d="M5 2h9l5 5v15H5ZM14 2v6h5m-9 3 6 4-6 4Z"/>',
+    "file_code": '<path d="M5 2h9l5 5v15H5ZM14 2v6h5m-9 4-2 3 2 3m4-6 2 3-2 3"/>',
 }
 
 

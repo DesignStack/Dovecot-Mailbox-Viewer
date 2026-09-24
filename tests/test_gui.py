@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import QCoreApplication, QEvent, QUrl
 from PySide6.QtGui import QTextDocument
 from email.message import EmailMessage
 
@@ -64,6 +64,8 @@ class GuiImportTests(unittest.TestCase):
                     app.processEvents()
                     time.sleep(0.01)
                 window.close()
+                window.deleteLater()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def test_remote_images_blocked_until_explicit_action(self):
         app = QApplication.instance() or QApplication([])
@@ -75,3 +77,5 @@ class GuiImportTests(unittest.TestCase):
         result = preview.loadResource(QTextDocument.ResourceType.ImageResource,
                                       QUrl("https://example.org/tracker.png"))
         self.assertEqual(result.pixelColor(0, 0).alpha(), 0)
+        preview.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

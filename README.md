@@ -13,10 +13,13 @@ pip install -r requirements.txt
 python -m viewer.app
 ```
 
-Choose **Open archive** or **Open folder**. A background task scans the mailbox and builds a local SQLite search index. Select folders on the left, messages in the middle, and read the message on the right. Search terms match subject, sender, recipients and plain-text message content. Use **All mail** to search across folders. The search options button adds sender, subject, date and attachment filters. Use the **three-dot menu** at the top right of an email to save attachments, export the original `.eml`, or download images. The top toolbar has Search options followed by Open archive and Open folder, all with matching outline icons. The app opens one mailbox at a time; a multi-account backup asks which mailbox to open. **Clear cache** removes derived copies and search indexes from your computer.
+Choose **Open archive** or **Open folder**. A background task scans the mailbox and builds a local SQLite search index. Select folders on the left, messages in the middle, and read the message on the right. Search terms match subject, sender, recipients and plain-text message content. Use **All mail** to search across folders. The search options button adds sender, subject, date and attachment filters. Attachments also appear as cards below the message date, showing a file-type icon, filename and size. Click a card to save that file. Use the **three-dot menu** at the top right of an email to save attachments, export the original `.eml`, or download images. The top toolbar has Search options followed by Open archive and Open folder, all with matching outline icons. The app opens one mailbox at a time; a multi-account backup asks which mailbox to open. **Clear cache** removes derived copies and search indexes from your computer.
 
 HTML emails are displayed in the preview. Remote images are blocked by default;
-the message banner offers **Download images** for that message only. Inline
+the message banner offers **Download images** for that message only. Each request has a
+20-second total deadline, including redirects and connection setup. **Stop** cancels
+outstanding requests; successfully loaded images stay visible. If some fail, the banner
+shows how many loaded and offers **Try again**. Inline
 images stored inside the email are displayed locally. External links open only
 after confirmation. Qt's HTML renderer supports common email layouts, but
 complex CSS may look different from a browser.
@@ -84,3 +87,10 @@ not yet supported; those backups may show unknown flags. Expunged messages still
 in storage are displayed with an Expunged label for recovery. Export the selected email
 with **File → Export email as .eml…** or the email’s three-dot menu; it writes the
 original message bytes.
+
+
+## About the author
+
+Created by [DesignStack](https://designstack.co.uk), a web design agency in Weymouth, Dorset.
+
+Questions or feedback? [Contact the author](mailto:hello@designstack.co.uk). You can also use **Help → Contact author** or **Help → About** in the app.
