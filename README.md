@@ -1,6 +1,6 @@
 # Dovecot Mailbox Viewer
 
-A local, read-only Windows desktop viewer for JetBackup/cPanel **mdbox** mail backups. Open a `.tar.gz` archive or the extracted `backup/email` directory. Mail stays on your computer; the application makes a separate local cache for searching and previews.
+A local, read-only Windows desktop viewer for JetBackup/cPanel **mdbox** mail backups. Open a `.tar.gz` archive or the extracted `backup/email` directory. Mailbox content stays on your computer; the application makes a separate local cache for searching and previews.
 
 ## Run from source
 
@@ -13,7 +13,7 @@ pip install -r requirements.txt
 python -m viewer.app
 ```
 
-Choose **Open archive** or **Open folder**. A background task scans the mailbox and builds a local SQLite search index. Select folders on the left, messages in the middle, and read the message on the right. Search terms match subject, sender, recipients and plain-text message content. Use **All mail** to search across folders. The search options button adds sender, subject, date and attachment filters. Save attachments with the button in the preview. **Clear cache** removes derived copies and search indexes from your computer.
+Choose **Open archive** or **Open folder**. A background task scans the mailbox and builds a local SQLite search index. Select folders on the left, messages in the middle, and read the message on the right. Search terms match subject, sender, recipients and plain-text message content. Use **All mail** to search across folders. The search options button adds sender, subject, date and attachment filters. Use the **three-dot menu** at the top right of an email to save attachments, export the original `.eml`, or download images. The top toolbar has Search options followed by Open archive and Open folder, all with matching outline icons. The app opens one mailbox at a time; a multi-account backup asks which mailbox to open. **Clear cache** removes derived copies and search indexes from your computer.
 
 HTML emails are displayed in the preview. Remote images are blocked by default;
 the message banner offers **Download images** for that message only. Inline
@@ -47,8 +47,8 @@ before distributing it to others.
 
 - The source archive and extracted mailbox are never changed. The app writes only to `%LOCALAPPDATA%/DesignStack/DovecotMailboxViewer`.
 - Recognises the dbox `m.*` container used by the supplied backup, including gzip-compressed message records and the `B<mailbox>` metadata. It discovers folders even if empty.
-- `B` metadata labels the mailbox in this sample. This first release does **not** decode Dovecot's binary mailbox/map indexes, so it does not promise authoritative deletion state, read/unread flags, or accurate folder placement for every Dovecot version. Treat ambiguous records as review material, not an exact live-mailbox reconstruction.
-- HTML messages render locally with external resources blocked by default. Loading external images is a per-message choice. Attachments are never run automatically.
+- `B` metadata labels the mailbox in this sample. Supported transaction logs supply read/deleted flags, but main index snapshots and map indexes are not yet supported, so it does not promise authoritative state or folder placement for every Dovecot version. Treat ambiguous records as review material, not an exact live-mailbox reconstruction.
+- HTML messages render locally with external resources blocked by default. Loading external images is a per-message choice. Failed downloads keep the notice visible with a **Try again** link and diagnostic logging. Attachments are never run automatically.
 - Archives are processed one storage file at a time; a large archive requires free disk space for the private search database. Initial indexing may take time. Tar paths are never extracted to arbitrary destinations.
 - This is a first version verified with the supplied eight-message JetBackup sample; test against more backups before using it as a general-purpose forensic viewer.
 
@@ -59,7 +59,9 @@ before distributing it to others.
 - `viewer/app.py` contains the Qt interface and background import worker.
 - `viewer/html_preview.py` handles safe HTML previews and the optional image requests.
 - `tests/test_mdbox.py` tests dbox records without using private email fixtures.
-- `tests/test_gui.py` checks the background import and GUI thread handoff.
+- `viewer/icons.py` provides the original single-colour outline icons; `viewer/mail_widgets.py` paints folder and message rows.
+- `tests/test_gui.py` checks the background import, GUI thread handoff and export action.
+- `tests/test_image_downloads.py` uses a local HTTP server to test downloads, encoded URLs, redirects, repainting, retries and cancellation.
 
 Do not commit client email archives or generated cache folders to GitHub.
 
@@ -80,5 +82,5 @@ When an index cannot establish a message's status, the app leaves it unmarked ra
 than claiming it is unread. Main index snapshots and older transaction log formats are
 not yet supported; those backups may show unknown flags. Expunged messages still present
 in storage are displayed with an Expunged label for recovery. Export the selected email
-with **File → Export selected email as .eml…** or the preview button; it writes the
+with **File → Export email as .eml…** or the email’s three-dot menu; it writes the
 original message bytes.

@@ -7,6 +7,7 @@ import tarfile
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QUrl
@@ -46,6 +47,17 @@ class GuiImportTests(unittest.TestCase):
                 self.assertEqual(window.heading.text(), "GUI check")
                 search = window.catalogue.messages(None, "", sender="Example", subject="check")
                 self.assertEqual(len(search), 1)
+                target = Path(temp) / 'exported.eml'
+                with patch('viewer.app.QFileDialog.getSaveFileName', return_value=(str(target), '')):
+                    window.export_action.trigger()
+                self.assertEqual(target.read_bytes(), raw)
+                window.search.setText('no-such-message')
+                self.assertEqual(window.listing.count(), 0)
+                self.assertFalse(window.export_action.isEnabled())
+                self.assertFalse(window.attachment_action.isEnabled())
+                self.assertEqual(window.preview.toPlainText(), '')
+                window.search.clear()
+                self.assertEqual(window.heading.text(), 'GUI check')
             finally:
                 # Drain the worker before Qt destroys its thread at test shutdown.
                 while window.worker_thread is not None and time.monotonic() < deadline:
@@ -62,4 +74,4 @@ class GuiImportTests(unittest.TestCase):
         self.assertEqual(preview.remote_images, {})
         result = preview.loadResource(QTextDocument.ResourceType.ImageResource,
                                       QUrl("https://example.org/tracker.png"))
-        self.assertEqual(bytes(result), b"")
+        self.assertEqual(result.pixelColor(0, 0).alpha(), 0)
