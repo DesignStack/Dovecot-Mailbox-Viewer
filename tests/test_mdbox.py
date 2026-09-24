@@ -37,6 +37,8 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(len(catalogue.messages("INBOX", "searchable")), 1)
             self.assertEqual(len(catalogue.messages("Archive")), 0)
             self.assertEqual(len(catalogue.messages(None, "missing")), 0)
+            self.assertEqual(len(catalogue.messages(None, sender="person@example.com")), 1)
+            self.assertEqual(len(catalogue.messages(None, attachments=True)), 0)
             catalogue.close()
 
 

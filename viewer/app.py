@@ -1,20 +1,23 @@
-"""DesignStack Dovecot Mailbox Viewer desktop interface."""
+"""Dovecot Mailbox Viewer desktop interface."""
 
 from pathlib import Path
+from email.utils import parsedate_to_datetime
 import sys
 import logging
 from logging.handlers import RotatingFileHandler
 import time
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt, QUrl
-from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt, QUrl, QSize
+from PySide6.QtGui import QAction, QDesktopServices, QIcon, QPixmap, QPainter, QColor, QPen, QFont
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QListWidget, QMainWindow, QMessageBox, QProgressBar, QPushButton, QSplitter,
-    QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox,
+    QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMainWindow, QMessageBox, QProgressBar, QPushButton, QSplitter,
+    QStyle, QToolButton, QVBoxLayout, QWidget,
 )
 
-from viewer.catalog import Catalogue, cache_path, describe, html_to_text
+from viewer.catalog import Catalogue, cache_path, describe
+from viewer.html_preview import SafeHtmlPreview
 from viewer.mdbox import discover, read_account
 
 
@@ -34,6 +37,69 @@ def configure_logging():
         logging.getLogger("viewer").error("Unhandled application error", exc_info=(exc_type, exc_value, exc_traceback))
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
     sys.excepthook = log_uncaught
+
+
+def app_icon():
+    """Draw a small original mailbox glyph at runtime; no external asset needed."""
+    image = QPixmap(64, 64)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QColor("#3478d4"))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawRoundedRect(4, 5, 56, 54, 13, 13)
+    painter.setPen(QPen(Qt.GlobalColor.white, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+    painter.drawRect(15, 19, 34, 25)
+    painter.drawLine(16, 20, 32, 33)
+    painter.drawLine(48, 20, 32, 33)
+    painter.end()
+    return QIcon(image)
+
+
+class SearchDialog(QDialog):
+    """Search options stay separate from the compact toolbar."""
+
+    def __init__(self, current: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Search mail")
+        self.setMinimumWidth(400)
+        layout = QFormLayout(self)
+        self.words = QLineEdit(current.get("query", ""))
+        self.sender = QLineEdit(current.get("sender", ""))
+        self.subject = QLineEdit(current.get("subject", ""))
+        self.attachment = QCheckBox("Only emails with attachments")
+        self.attachment.setChecked(current.get("attachments", False))
+        self.after = QLineEdit(current.get("after", ""))
+        self.before = QLineEdit(current.get("before", ""))
+        self.after.setPlaceholderText("YYYY-MM-DD")
+        self.before.setPlaceholderText("YYYY-MM-DD")
+        layout.addRow("Any words", self.words)
+        layout.addRow("From", self.sender)
+        layout.addRow("Subject", self.subject)
+        layout.addRow("From date", self.after)
+        layout.addRow("To date", self.before)
+        layout.addRow("", self.attachment)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addRow(buttons)
+
+    def options(self):
+        return dict(query=self.words.text().strip(), sender=self.sender.text().strip(),
+                    subject=self.subject.text().strip(), after=self.after.text().strip(),
+                    before=self.before.text().strip(), attachments=self.attachment.isChecked())
+
+    def accept(self):
+        from datetime import date
+        for field in (self.after, self.before):
+            if field.text().strip():
+                try:
+                    date.fromisoformat(field.text().strip())
+                except ValueError:
+                    QMessageBox.warning(self, "Invalid date", "Enter dates as YYYY-MM-DD.")
+                    field.setFocus()
+                    return
+        super().accept()
 
 
 class ImportWorker(QObject):
@@ -79,24 +145,34 @@ class ImportWorker(QObject):
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DesignStack Dovecot Mailbox Viewer")
-        self.resize(1320, 800)
+        self.setWindowTitle("Dovecot Mailbox Viewer")
+        self.setWindowIcon(app_icon())
+        self.resize(1380, 860)
         self.catalogue = None
         self.source = None
         self.worker_thread = None
         self.worker = None  # Keep the Python wrapper alive until the Qt thread finishes.
         self.attachments = []
+        self.search_options = {}
 
         self.setStyleSheet("""
-            QMainWindow, QWidget { background: #f5f7fb; color: #17243b; font: 10pt 'Segoe UI'; }
-            QLineEdit, QComboBox, QListWidget, QTableWidget, QTextBrowser {
-                background: white; border: 1px solid #dfe5ee; border-radius: 6px; padding: 5px;
+            QMainWindow, QWidget { background: #ffffff; color: #252b32; font: 10pt 'Segoe UI'; }
+            QMenuBar, QMenu { background: #f9fafc; }
+            QLineEdit, QComboBox, QListWidget, QTextBrowser {
+                background: white; border: 1px solid #e0e4ea; border-radius: 6px; padding: 5px;
             }
-            QPushButton { background: #234ec4; color: white; border: 0; border-radius: 6px;
-                          padding: 9px 14px; font-weight: 600; }
-            QPushButton:disabled { background: #aab7d3; }
-            QPushButton:hover { background: #183f9d; }
-            QHeaderView::section { background: #eaf0fa; padding: 8px; border: 0; }
+            QListWidget { border: 0; border-radius: 0; outline: none; padding: 0; }
+            QListWidget::item { border-bottom: 1px solid #edf0f4; padding: 9px 12px; }
+            QListWidget::item:selected { background: #3478d4; color: white; }
+            QPushButton { background: #3478d4; color: white; border: 0; border-radius: 5px;
+                          padding: 8px 13px; font-weight: 600; }
+            QPushButton:hover { background: #2767bd; }
+            QPushButton:disabled { background: #b7c5da; }
+            QToolButton { border: 1px solid #dbe1ea; background: #fff; border-radius: 6px;
+                          padding: 7px; }
+            QToolButton:hover { background: #eaf1fb; }
+            QFrame#toolbar { background: #f8f9fb; border-bottom: 1px solid #e4e8ef; }
+            QFrame#imageNotice { background: #fff6dd; border: 1px solid #f2db9a; border-radius: 5px; }
         """)
 
         open_archive = QAction("Open archive…", self)
@@ -112,29 +188,34 @@ class Window(QMainWindow):
 
         container = QWidget()
         outer = QVBoxLayout(container)
-        toolbar = QHBoxLayout()
-        title = QLabel("DesignStack  /  Dovecot Mailbox Viewer")
-        title.setStyleSheet("font-size: 17pt; font-weight: 700; color: #183477")
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        toolbar_frame = QFrame()
+        toolbar_frame.setObjectName("toolbar")
+        toolbar = QHBoxLayout(toolbar_frame)
+        title = QLabel("✉  Dovecot Mailbox Viewer")
+        title.setStyleSheet("font-size: 13pt; font-weight: 700; color: #244a7d")
         toolbar.addWidget(title)
         toolbar.addStretch()
-        archive_btn = QPushButton("Open archive")
-        archive_btn.clicked.connect(self.open_archive)
-        folder_btn = QPushButton("Open folder")
-        folder_btn.clicked.connect(self.open_folder)
-        toolbar.addWidget(archive_btn)
-        toolbar.addWidget(folder_btn)
-        outer.addLayout(toolbar)
+        toolbar.addWidget(self._tool("Open backup", QStyle.StandardPixmap.SP_DialogOpenButton, self.open_archive))
+        toolbar.addWidget(self._tool("Open folder", QStyle.StandardPixmap.SP_DirOpenIcon, self.open_folder))
+        toolbar.addWidget(self._tool("Search options", QStyle.StandardPixmap.SP_FileDialogContentsView, self.show_search))
+        outer.addWidget(toolbar_frame)
 
         row = QHBoxLayout()
+        row.setContentsMargins(12, 9, 12, 9)
         self.account = QComboBox()
-        self.account.setMinimumWidth(240)
+        self.account.setMinimumWidth(260)
         self.account.currentIndexChanged.connect(self.load_account)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search sender, subject, recipients or message text…")
+        self.search.setPlaceholderText("Search mail…")
+        self.search.setMaximumWidth(420)
         self.search.textChanged.connect(self.refresh_messages)
-        row.addWidget(QLabel("Mailbox:"))
+        row.addWidget(QLabel("Backup:"))
         row.addWidget(self.account)
+        row.addStretch()
         row.addWidget(self.search, 1)
+        row.addWidget(self._tool("More search options", QStyle.StandardPixmap.SP_FileDialogDetailedView, self.show_search))
         outer.addLayout(row)
 
         progress_row = QHBoxLayout()
@@ -144,49 +225,75 @@ class Window(QMainWindow):
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("%p%")
         self.progress_bar.hide()
+        progress_row.setContentsMargins(12, 0, 12, 6)
         progress_row.addWidget(self.activity)
         progress_row.addWidget(self.progress_bar, 1)
         outer.addLayout(progress_row)
 
         panes = QSplitter(Qt.Orientation.Horizontal)
         self.folders = QListWidget()
+        self.folders.setObjectName("folders")
         self.folders.currentRowChanged.connect(self.refresh_messages)
         panes.addWidget(self.folders)
 
-        self.listing = QTableWidget(0, 4)
-        self.listing.setHorizontalHeaderLabels(["From", "Subject", "Date", "📎"])
-        self.listing.verticalHeader().hide()
-        self.listing.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.listing.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.listing.setAlternatingRowColors(True)
-        self.listing.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.listing.itemSelectionChanged.connect(self.show_message)
+        self.listing = QListWidget()
+        self.listing.setObjectName("messages")
+        self.listing.currentItemChanged.connect(self.show_message)
         panes.addWidget(self.listing)
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(18, 14, 18, 12)
+        right_layout.setSpacing(8)
         self.heading = QLabel("Open an archive or extracted mailbox folder")
         self.heading.setWordWrap(True)
-        self.heading.setStyleSheet("font-size: 14pt; font-weight: 700")
+        self.heading.setStyleSheet("font-size: 15pt; font-weight: 700")
         self.details = QLabel("")
         self.details.setWordWrap(True)
         self.details.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.preview = QTextBrowser()
-        self.preview.setOpenLinks(False)
-        self.preview.setOpenExternalLinks(False)
-        self.preview.anchorClicked.connect(self.confirm_link)
+        self.details.setStyleSheet("color: #66717f; padding: 4px 0;")
+        self.image_notice = QFrame()
+        self.image_notice.setObjectName("imageNotice")
+        notice_layout = QHBoxLayout(self.image_notice)
+        notice_layout.addWidget(QLabel("Remote images are blocked to protect your privacy."), 1)
+        images_button = QPushButton("Download images")
+        images_button.clicked.connect(self.download_images)
+        notice_layout.addWidget(images_button)
+        self.image_notice.hide()
+        self.preview = SafeHtmlPreview()
         self.save_button = QPushButton("Save attachment…")
         self.save_button.setEnabled(False)
         self.save_button.clicked.connect(self.save_attachment)
         right_layout.addWidget(self.heading)
         right_layout.addWidget(self.details)
+        right_layout.addWidget(self.image_notice)
         right_layout.addWidget(self.preview, 1)
         right_layout.addWidget(self.save_button)
         panes.addWidget(right)
-        panes.setSizes([230, 520, 570])
+        panes.setSizes([240, 360, 780])
         outer.addWidget(panes, 1)
         self.setCentralWidget(container)
         self.statusBar().showMessage("Ready · Local, read-only backup viewer")
+
+    def _tool(self, label, icon, action):
+        button = QToolButton()
+        button.setIcon(self.style().standardIcon(icon))
+        button.setToolTip(label)
+        button.setAccessibleName(label)
+        button.clicked.connect(action)
+        return button
+
+    def show_search(self):
+        dialog = SearchDialog(dict(self.search_options, query=self.search.text()), self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.search_options = dialog.options()
+            self.search.setText(self.search_options.pop("query"))
+            self.refresh_messages()
+
+    def download_images(self):
+        if self.preview.remote_urls:
+            self.preview.load_images()
+            self.image_notice.hide()
 
     def open_archive(self):
         name, _ = QFileDialog.getOpenFileName(self, "Open JetBackup archive", "", "Archives (*.tar.gz *.tgz)")
@@ -228,7 +335,7 @@ class Window(QMainWindow):
         account = self.account.currentText()
         database = cache_path(self.source, account)
         self.folders.clear()
-        self.listing.setRowCount(0)
+        self.listing.clear()
         self.heading.setText("Indexing…")
         self.activity.setText(f"Preparing {account}…")
         self.progress_bar.setValue(0)
@@ -266,10 +373,16 @@ class Window(QMainWindow):
         self.progress_bar.setValue(100)
         self.activity.setText(f"Ready · {count} messages indexed")
         self.catalogue = Catalogue(self.pending_database)
-        self.folders.addItem(f"All folders  ({count})")
-        for row in self.catalogue.folders():
-            self.folders.addItem(f"{row['name']}  ({row['count']})")
-            self.folders.item(self.folders.count() - 1).setData(Qt.ItemDataRole.UserRole, row["name"])
+        all_item = QListWidgetItem(f"  ✉   All mail  ({count})")
+        self.folders.addItem(all_item)
+        folder_rows = sorted(self.catalogue.folders(), key=lambda row: (
+            {"INBOX": 0, "Sent": 1, "Drafts": 2, "Archive": 3, "Trash": 4, "spam": 5}.get(row["name"], 6), row["name"].lower()))
+        for row in folder_rows:
+            folder_name = row["name"]
+            icon = {"INBOX": "▣", "Sent": "➤", "Drafts": "▤", "Archive": "▧", "Trash": "♲", "spam": "⚠"}.get(folder_name, "▸")
+            item = QListWidgetItem(f"  {icon}   {folder_name}  ({row['count']})")
+            item.setData(Qt.ItemDataRole.UserRole, folder_name)
+            self.folders.addItem(item)
         self.folders.setCurrentRow(0)
         self.statusBar().showMessage(f"{count} messages indexed · {self.account.currentText()}")
 
@@ -294,37 +407,48 @@ class Window(QMainWindow):
         selected = self.folders.currentItem()
         folder = selected.data(Qt.ItemDataRole.UserRole) if selected else None
         try:
-            rows = self.catalogue.messages(folder, self.search.text())
+            rows = self.catalogue.messages(folder, self.search.text(), **self.search_options)
         except Exception as exc:
             self.statusBar().showMessage(f"Search error: {exc}")
             return
-        self.listing.setRowCount(len(rows))
-        for index, row in enumerate(rows):
-            for col, value in enumerate((row["sender"], row["subject"], row["date"], "📎" if row["has_attachment"] else "")):
-                item = QTableWidgetItem(value or "")
-                if col == 0:
-                    item.setData(Qt.ItemDataRole.UserRole, row["id"])
-                self.listing.setItem(index, col, item)
+        self.listing.blockSignals(True)
+        self.listing.clear()
+        for row in rows:
+            sender = (row["sender"] or "Unknown sender").split("<")[0].strip()[:45]
+            try:
+                shown_date = parsedate_to_datetime(row["date"]).strftime("%d %b %Y")
+            except (TypeError, ValueError, IndexError):
+                shown_date = ""
+            snippet = " ".join((row["body"] or "").split())[:130]
+            attachment = "  📎" if row["has_attachment"] else ""
+            item = QListWidgetItem(f"{sender[:27]}{attachment}    {shown_date}\n{row['subject'] or '(No subject)'}\n{snippet}")
+            item.setData(Qt.ItemDataRole.UserRole, row["id"])
+            item.setToolTip(f"{row['date']} · {row['folder']}")
+            item.setSizeHint(QSize(290, 78))
+            self.listing.addItem(item)
+        self.listing.blockSignals(False)
         self.statusBar().showMessage(f"Showing {len(rows)} messages" + (" (first 5,000)" if len(rows) == 5000 else ""))
 
-    def show_message(self):
-        selection = self.listing.selectedItems()
-        if not selection or not self.catalogue:
+    def show_message(self, _=None):
+        item = self.listing.currentItem()
+        if not item or not self.catalogue:
             return
-        ident = self.listing.item(selection[0].row(), 0).data(Qt.ItemDataRole.UserRole)
+        ident = item.data(Qt.ItemDataRole.UserRole)
         row = self.catalogue.message(ident)
         if row is None:
             return
         msg, plain, html, _ = describe(row["raw"])
         self.heading.setText(row["subject"] or "(No subject)")
         self.details.setText("\n".join(f"{key}: {msg.get(key, '')}" for key in ("From", "To", "Cc", "Date") if msg.get(key)) + f"\nFolder: {row['folder']}")
-        # Show text only: do not load remote tracking images or active email content.
-        if plain:
-            self.preview.setPlainText(plain)
-        elif html:
-            self.preview.setPlainText(html_to_text(html))
+        if html:
+            self.preview.display(html, msg)
+            self.image_notice.setVisible(bool(self.preview.remote_urls))
+        elif plain:
+            self.preview.display(f"<pre style='white-space:pre-wrap'>{__import__('html').escape(plain)}</pre>", msg)
+            self.image_notice.hide()
         else:
             self.preview.setPlainText("(No readable text body)")
+            self.image_notice.hide()
         self.attachments = [p for p in msg.walk() if not p.is_multipart() and (p.get_filename() or p.get_content_disposition() == "attachment")]
         self.save_button.setText(f"Save attachment… ({len(self.attachments)})")
         self.save_button.setEnabled(bool(self.attachments))
@@ -343,12 +467,6 @@ class Window(QMainWindow):
         if destination:
             Path(destination).write_bytes(self.attachments[index].get_payload(decode=True) or b"")
 
-    def confirm_link(self, url: QUrl):
-        if url.scheme() not in ("https", "http"):
-            return
-        if QMessageBox.question(self, "Open external link?", f"Open this link in your browser?\n{url.toString()}") == QMessageBox.StandardButton.Yes:
-            QDesktopServices.openUrl(url)
-
     def clear_cache(self):
         if not self.source or not self.account.currentText():
             return
@@ -362,7 +480,7 @@ class Window(QMainWindow):
         for suffix in ("", "-wal", "-shm"):
             Path(str(database) + suffix).unlink(missing_ok=True)
         self.folders.clear()
-        self.listing.setRowCount(0)
+        self.listing.clear()
         self.preview.clear()
         self.heading.setText("Search cache cleared")
         self.statusBar().showMessage("Cache removed; original backup unchanged")
@@ -380,7 +498,8 @@ class Window(QMainWindow):
 def main():
     configure_logging()
     app = QApplication(sys.argv)
-    app.setApplicationName("DesignStack Dovecot Mailbox Viewer")
+    app.setApplicationName("Dovecot Mailbox Viewer")
+    app.setWindowIcon(app_icon())
     window = Window()
     window.show()
     return app.exec()

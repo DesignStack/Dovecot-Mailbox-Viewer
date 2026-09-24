@@ -9,8 +9,12 @@ import time
 import unittest
 
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QTextDocument
+from email.message import EmailMessage
 
 from viewer.app import Window
+from viewer.html_preview import SafeHtmlPreview
 
 
 class GuiImportTests(unittest.TestCase):
@@ -36,13 +40,26 @@ class GuiImportTests(unittest.TestCase):
                 self.assertIsNotNone(window.catalogue)
                 self.assertIsNone(window.worker_thread)
                 self.assertEqual(window.progress_bar.value(), 100)
-                self.assertEqual(window.listing.rowCount(), 1)
-                window.listing.selectRow(0)
+                self.assertEqual(window.listing.count(), 1)
+                window.listing.setCurrentRow(0)
                 app.processEvents()
                 self.assertEqual(window.heading.text(), "GUI check")
+                search = window.catalogue.messages(None, "", sender="Example", subject="check")
+                self.assertEqual(len(search), 1)
             finally:
                 # Drain the worker before Qt destroys its thread at test shutdown.
                 while window.worker_thread is not None and time.monotonic() < deadline:
                     app.processEvents()
                     time.sleep(0.01)
                 window.close()
+
+    def test_remote_images_blocked_until_explicit_action(self):
+        app = QApplication.instance() or QApplication([])
+        preview = SafeHtmlPreview()
+        message = EmailMessage()
+        preview.display('<p>Hello</p><img src="https://example.org/tracker.png">', message)
+        self.assertEqual(preview.remote_urls, ["https://example.org/tracker.png"])
+        self.assertEqual(preview.remote_images, {})
+        result = preview.loadResource(QTextDocument.ResourceType.ImageResource,
+                                      QUrl("https://example.org/tracker.png"))
+        self.assertEqual(bytes(result), b"")

@@ -108,19 +108,41 @@ class Catalogue:
             FROM folders LEFT JOIN messages ON messages.folder=folders.name
             GROUP BY folders.name ORDER BY folders.name COLLATE NOCASE""").fetchall()
 
-    def messages(self, folder=None, query=""):
-        sql = "SELECT id, folder, sender, subject, date, has_attachment FROM messages WHERE 1=1"
+    def messages(self, folder=None, query="", sender="", subject="", attachments=False,
+                 after="", before=""):
+        sql = "SELECT id, folder, sender, subject, date, body, has_attachment FROM messages WHERE 1=1"
         args = []
         if folder:
             sql += " AND folder=?"; args.append(folder)
+        if sender.strip():
+            sql += " AND sender LIKE ?"; args.append(f"%{sender.strip()}%")
+        if subject.strip():
+            sql += " AND subject LIKE ?"; args.append(f"%{subject.strip()}%")
+        if attachments:
+            sql += " AND has_attachment=1"
+        # Email Date headers are not normalised in the catalogue; apply date
+        # filters after retrieving candidate rows with parsed UTC dates below.
         if query.strip():
             # Quote user text to avoid FTS operators and punctuation errors.
             tokens = __import__("re").findall(r"\w+", query, __import__("re").UNICODE)
             if tokens:
                 sql += " AND id IN (SELECT rowid FROM message_search WHERE message_search MATCH ?)"
                 args.append(" AND ".join('"' + token.replace('"', '""') + '"' for token in tokens))
-        sql += " ORDER BY id DESC LIMIT 5000"
-        return self.conn.execute(sql, args).fetchall()
+        sql += " ORDER BY id DESC"
+        if not (after or before):
+            sql += " LIMIT 5000"
+        rows = self.conn.execute(sql, args).fetchall()
+        if after or before:
+            from email.utils import parsedate_to_datetime
+            from datetime import date
+            def in_range(row):
+                try:
+                    sent = parsedate_to_datetime(row["date"]).date()
+                    return (not after or sent >= date.fromisoformat(after)) and (not before or sent <= date.fromisoformat(before))
+                except (TypeError, ValueError, IndexError):
+                    return False
+            rows = [row for row in rows if in_range(row)]
+        return rows[:5000]
 
     def message(self, ident):
         return self.conn.execute("SELECT * FROM messages WHERE id=?", (ident,)).fetchone()
