@@ -15,6 +15,13 @@ python -m viewer.app
 
 Choose **Open archive** or **Open folder**. A background task scans the mailbox and builds a local SQLite search index. Select folders on the left, messages in the middle, and read the message on the right. Search terms match subject, sender, recipients and plain-text message content. Use **All folders** to search across folders. Save attachments with the button in the preview. **Clear cache** removes derived copies and search indexes from your computer.
 
+The progress bar shows how much of the selected mailbox's `m.*` storage has been
+processed, with a running message count. If an import fails, use **File → Open
+diagnostic log**. The log lives at
+`%LOCALAPPDATA%\DesignStack\DovecotMailboxViewer\viewer.log`; it records paths,
+counts and error details, but does not intentionally log email bodies. Check
+the log before sharing it, since file paths can contain account names.
+
 ## Build the Windows application
 
 On Windows, right-click `build-windows.ps1` and run it in PowerShell, or run
@@ -36,7 +43,7 @@ before distributing it to others.
 - Recognises the dbox `m.*` container used by the supplied backup, including gzip-compressed message records and the `B<mailbox>` metadata. It discovers folders even if empty.
 - `B` metadata labels the mailbox in this sample. This first release does **not** decode Dovecot's binary mailbox/map indexes, so it does not promise authoritative deletion state, read/unread flags, or accurate folder placement for every Dovecot version. Treat ambiguous records as review material, not an exact live-mailbox reconstruction.
 - HTML-only messages are shown as extracted text, so remote tracking images and active content cannot load. Attachments are never run automatically.
-- Archives are processed one storage file at a time; a large archive requires free disk space for the extracted `m.*` storage files and search database. Initial indexing may take time. Tar paths are never extracted to arbitrary destinations.
+- Archives are processed one storage file at a time; a large archive requires free disk space for the private search database. Initial indexing may take time. Tar paths are never extracted to arbitrary destinations.
 - This is a first version verified with the supplied eight-message JetBackup sample; test against more backups before using it as a general-purpose forensic viewer.
 
 ## Code layout
@@ -45,5 +52,6 @@ before distributing it to others.
 - `viewer/catalog.py` builds and queries a private SQLite catalogue and full-text index.
 - `viewer/app.py` contains the Qt interface and background import worker.
 - `tests/test_mdbox.py` tests dbox records without using private email fixtures.
+- `tests/test_gui.py` checks the background import and GUI thread handoff.
 
 Do not commit client email archives or generated cache folders to GitHub.

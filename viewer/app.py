@@ -2,12 +2,15 @@
 
 from pathlib import Path
 import sys
+import logging
+from logging.handlers import RotatingFileHandler
+import traceback
 
-from PySide6.QtCore import QObject, QThread, Signal, Qt, QUrl
+from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QListWidget, QMainWindow, QMessageBox, QPushButton, QSplitter,
+    QLineEdit, QListWidget, QMainWindow, QMessageBox, QProgressBar, QPushButton, QSplitter,
     QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
 )
 
@@ -15,8 +18,22 @@ from viewer.catalog import Catalogue, cache_path, describe, html_to_text
 from viewer.mdbox import discover, read_account
 
 
+def log_path() -> Path:
+    """Keep diagnostic logs separate from the source mailbox backup."""
+    return cache_path(Path("diagnostics"), "app").parent / "viewer.log"
+
+
+def configure_logging():
+    target = log_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(target, maxBytes=2_000_000, backupCount=2, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logging.getLogger("viewer").addHandler(handler)
+    logging.getLogger("viewer").setLevel(logging.INFO)
+
+
 class ImportWorker(QObject):
-    progress = Signal(int)
+    progress = Signal(int, int)  # percentage, message count
     completed = Signal(int)
     failed = Signal(str)
 
@@ -27,6 +44,7 @@ class ImportWorker(QObject):
     def run(self):
         catalogue = None
         try:
+            logging.getLogger("viewer").info("Import started: %s (%s)", self.source, self.account)
             catalogue = Catalogue(self.database)
             catalogue.reset()
             for folder in sorted(self.info["folders"]):
@@ -35,12 +53,15 @@ class ImportWorker(QObject):
             for record in read_account(self.source, self.info):
                 catalogue.add(record)
                 count += 1
+                percent = min(99, int(100 * record.bytes_done / max(1, record.bytes_total)))
+                self.progress.emit(percent, count)
                 if count % 25 == 0:
                     catalogue.commit()
-                    self.progress.emit(count)
             catalogue.commit()
+            logging.getLogger("viewer").info("Import complete: %s messages (%s)", count, self.account)
             self.completed.emit(count)
         except Exception as exc:
+            logging.getLogger("viewer").exception("Import failed for %s", self.account)
             self.failed.emit(str(exc))
         finally:
             if catalogue is not None:
@@ -55,6 +76,7 @@ class Window(QMainWindow):
         self.catalogue = None
         self.source = None
         self.worker_thread = None
+        self.worker = None  # Keep the Python wrapper alive until the Qt thread finishes.
         self.attachments = []
 
         self.setStyleSheet("""
@@ -75,8 +97,10 @@ class Window(QMainWindow):
         open_folder.triggered.connect(self.open_folder)
         clear_cache = QAction("Clear current cache", self)
         clear_cache.triggered.connect(self.clear_cache)
+        open_log = QAction("Open diagnostic log", self)
+        open_log.triggered.connect(self.open_log)
         file_menu = self.menuBar().addMenu("File")
-        file_menu.addActions([open_archive, open_folder, clear_cache])
+        file_menu.addActions([open_archive, open_folder, clear_cache, open_log])
 
         container = QWidget()
         outer = QVBoxLayout(container)
@@ -104,6 +128,17 @@ class Window(QMainWindow):
         row.addWidget(self.account)
         row.addWidget(self.search, 1)
         outer.addLayout(row)
+
+        progress_row = QHBoxLayout()
+        self.activity = QLabel("Ready")
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("%p%")
+        self.progress_bar.hide()
+        progress_row.addWidget(self.activity)
+        progress_row.addWidget(self.progress_bar, 1)
+        outer.addLayout(progress_row)
 
         panes = QSplitter(Qt.Orientation.Horizontal)
         self.folders = QListWidget()
@@ -186,22 +221,41 @@ class Window(QMainWindow):
         self.folders.clear()
         self.listing.setRowCount(0)
         self.heading.setText("Indexing…")
+        self.activity.setText(f"Preparing {account}…")
+        self.progress_bar.setValue(0)
+        self.progress_bar.show()
         self.statusBar().showMessage(f"Reading {account} · original backup remains untouched")
         self.worker_thread = QThread(self)
-        worker = ImportWorker(self.source, account, self.accounts[account], database)
-        worker.moveToThread(self.worker_thread)
-        self.worker_thread.started.connect(worker.run)
-        worker.progress.connect(lambda count: self.statusBar().showMessage(f"Indexed {count} messages…"))
-        worker.completed.connect(lambda count: self.import_done(database, count))
-        worker.failed.connect(lambda error: self.import_failed(error))
-        worker.completed.connect(self.worker_thread.quit)
-        worker.failed.connect(self.worker_thread.quit)
-        self.worker_thread.finished.connect(worker.deleteLater)
-        self.worker_thread.finished.connect(self.worker_thread.deleteLater)
+        self.pending_database = database
+        self.worker = ImportWorker(self.source, account, self.accounts[account], database)
+        self.worker.moveToThread(self.worker_thread)
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker.progress.connect(self.update_progress)
+        self.worker.completed.connect(self.import_done)
+        self.worker.failed.connect(self.import_failed)
+        self.worker.completed.connect(self.worker_thread.quit)
+        self.worker.failed.connect(self.worker_thread.quit)
+        self.worker_thread.finished.connect(self.worker.deleteLater)
+        self.worker_thread.finished.connect(self.thread_finished)
         self.worker_thread.start()
 
-    def import_done(self, database, count):
-        self.catalogue = Catalogue(database)
+    @Slot()
+    def thread_finished(self):
+        self.worker = None
+        self.worker_thread.deleteLater()
+        self.worker_thread = None
+
+    @Slot(int, int)
+    def update_progress(self, percent, count):
+        self.progress_bar.setValue(percent)
+        self.activity.setText(f"Indexing… {count} messages processed")
+        self.statusBar().showMessage(f"Indexing {percent}% · {count} messages")
+
+    @Slot(int)
+    def import_done(self, count):
+        self.progress_bar.setValue(100)
+        self.activity.setText(f"Ready · {count} messages indexed")
+        self.catalogue = Catalogue(self.pending_database)
         self.folders.addItem(f"All folders  ({count})")
         for row in self.catalogue.folders():
             self.folders.addItem(f"{row['name']}  ({row['count']})")
@@ -209,10 +263,20 @@ class Window(QMainWindow):
         self.folders.setCurrentRow(0)
         self.statusBar().showMessage(f"{count} messages indexed · {self.account.currentText()}")
 
+    @Slot(str)
     def import_failed(self, error):
+        self.progress_bar.hide()
+        self.activity.setText("Import failed · see File → Open diagnostic log")
         self.heading.setText("Unable to index this backup")
         self.statusBar().showMessage("Import failed")
-        QMessageBox.critical(self, "Import failed", error)
+        QMessageBox.critical(self, "Import failed", f"{error}\n\nDiagnostic log: {log_path()}")
+
+    def open_log(self):
+        target = log_path()
+        if not target.exists():
+            QMessageBox.information(self, "Diagnostic log", "No log has been created yet.")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(target)))
 
     def refresh_messages(self, _=None):
         if not self.catalogue:
@@ -304,6 +368,7 @@ class Window(QMainWindow):
 
 
 def main():
+    configure_logging()
     app = QApplication(sys.argv)
     app.setApplicationName("DesignStack Dovecot Mailbox Viewer")
     window = Window()

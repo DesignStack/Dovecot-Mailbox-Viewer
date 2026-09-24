@@ -5,7 +5,7 @@ The per-record B field works for the supplied JetBackup sample; absent metadata
 is surfaced as Unfiled rather than silently guessing a mailbox.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 import re
 import tarfile
@@ -21,6 +21,8 @@ class Record:
     mailbox: str
     raw: bytes
     source: str
+    bytes_done: int = 0
+    bytes_total: int = 0
 
 
 def _root_parts(parts: tuple[str, ...]) -> tuple[str, ...] | None:
@@ -112,11 +114,17 @@ def records(stream, source: str):
 def read_account(path: Path, info: dict):
     """Open only selected storage members; never extract tar paths to disk."""
     if path.is_dir():
+        total = sum(Path(name).stat().st_size for name in info["storage"])
+        completed = 0
         for name in sorted(info["storage"]):
             with open(name, "rb") as stream:
-                yield from records(stream, name)
+                for record in records(stream, name):
+                    yield replace(record, bytes_done=completed + stream.tell(), bytes_total=total)
+            completed += Path(name).stat().st_size
     else:
         with tarfile.open(path, "r:gz") as tf:
+            total = sum(tf.getmember(name).size for name in info["storage"])
+            completed = 0
             for name in sorted(info["storage"]):
                 member = tf.getmember(name)
                 if not member.isfile():
@@ -125,4 +133,6 @@ def read_account(path: Path, info: dict):
                 if stream is None:
                     continue
                 with stream:
-                    yield from records(stream, name)
+                    for record in records(stream, name):
+                        yield replace(record, bytes_done=completed + stream.tell(), bytes_total=total)
+                completed += member.size
