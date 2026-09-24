@@ -2,6 +2,8 @@
 
 A local, read-only Windows desktop viewer for JetBackup/cPanel **mdbox** mail backups. Open a `.tar.gz` archive or the extracted `backup/email` directory. Mailbox content stays on your computer; the application makes a separate local cache for searching and previews.
 
+![Dovecot Mailbox Viewer welcome screen with Open Archive and Open Folder choices](docs/images/welcome-screen.png)
+
 ## Run from source
 
 Install Python 3.11+ on Windows, then in PowerShell:
