@@ -13,5 +13,6 @@ build/
 dist/
 *.spec
 DesignStack-Dovecot-Mailbox-Viewer-Windows.zip
+Dovecot-Mailbox-Viewer-Windows.zip
 .idea/
 .vscode/

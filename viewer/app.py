@@ -24,6 +24,7 @@ from viewer.attachments import AttachmentList, collect_attachments, suggested_fi
 from viewer.welcome import WelcomeDialog, WelcomePage
 from viewer.mdbox import discover, read_account
 from viewer.dovecot_index import read_statuses, SEEN, DELETED
+from viewer.version import __version__
 
 
 def log_path() -> Path:
@@ -38,6 +39,8 @@ def configure_logging():
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logging.getLogger("viewer").addHandler(handler)
     logging.getLogger("viewer").setLevel(logging.INFO)
+    logging.getLogger("viewer").info("Dovecot Mailbox Viewer %s starting (%s)",
+                                     __version__, "portable" if getattr(sys, "frozen", False) else "source")
     def log_uncaught(exc_type, exc_value, exc_traceback):
         logging.getLogger("viewer").error("Unhandled application error", exc_info=(exc_type, exc_value, exc_traceback))
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
@@ -498,6 +501,9 @@ class Window(QMainWindow):
         title = QLabel("Dovecot Mailbox Viewer")
         title.setStyleSheet("font-size: 19px; font-weight: 600;")
         layout.addWidget(title)
+        version = QLabel(f"Version {__version__}")
+        version.setStyleSheet("color: #657286;")
+        layout.addWidget(version)
         description = QLabel("A local, read-only viewer for Dovecot mdbox backups from JetBackup and cPanel. "
                              "Browse and search emails, save attachments and export messages as .eml files. "
                              "Your original backup is never changed.")
@@ -909,7 +915,12 @@ def main():
     configure_logging()
     app = QApplication(sys.argv)
     app.setApplicationName("Dovecot Mailbox Viewer")
+    app.setApplicationVersion(__version__)
     app.setWindowIcon(app_icon())
+    if len(sys.argv) == 3 and sys.argv[1] == "--smoke-test":
+        # CI launches the packaged executable from a folder containing only it.
+        from viewer.smoke_test import run
+        return run(app, Window, Path(sys.argv[2]))
     window = Window()
     window.show()
     return app.exec()

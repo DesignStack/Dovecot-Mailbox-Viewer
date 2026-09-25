@@ -2,6 +2,27 @@
 
 A local, read-only Windows desktop viewer for JetBackup/cPanel **mdbox** mail backups. Open a `.tar.gz` archive or the extracted `backup/email` directory. Mailbox content stays on your computer; the application makes a separate local cache for searching and previews.
 
+## Download for Windows
+
+**[Download the Windows app (.exe)](https://github.com/DesignStack/Dovecot-Mailbox-Viewer/releases/latest/download/Dovecot-Mailbox-Viewer-Windows.exe)**
+
+For Windows 10/11, 64-bit. Save the file and double-click it. There is no installer,
+no ZIP to extract and no Python installation needed. All required application
+files are bundled inside the EXE; there is no separate `_internal` folder to copy.
+It may take a few seconds to open while it automatically unpacks support files
+into a temporary folder, which is normally removed when the app closes.
+
+Choose **Open Archive** or **Open Folder** in the welcome guide to get started.
+To update, close the app and replace your old EXE with the new download. Your
+original backup and reusable search cache are kept separately.
+
+[Release notes and older downloads](https://github.com/DesignStack/Dovecot-Mailbox-Viewer/releases)
+· [Changelog](CHANGELOG.md)
+
+Check the installed version in **Help → About** or the EXE's Windows **Properties
+→ Details**. Each release also includes `SHA256SUMS.txt` for checking its download.
+The **Source code** ZIP links on release pages are for developers.
+
 ![Dovecot Mailbox Viewer welcome screen with Open Archive and Open Folder choices](docs/images/welcome-screen.png)
 
 ## Run from source
@@ -48,20 +69,26 @@ the log before sharing it, since file paths can contain account names.
 
 On Windows, right-click `build-windows.ps1` and run it in PowerShell, or run
 `powershell -ExecutionPolicy Bypass -File .\build-windows.ps1` from the project
-folder. This installs build dependencies, runs the tests, and writes
-`Dovecot-Mailbox-Viewer-Windows.zip`. Unzip the output and launch
-`Dovecot Mailbox Viewer.exe`; the other files in its folder are
-required. Python is not needed on the destination PC.
+folder. This installs build dependencies, runs the tests and builds
+`dist/Dovecot-Mailbox-Viewer-Windows.exe` using PyInstaller's one-file mode.
+It embeds the app version in Windows file properties, checks the actual EXE
+from a clean folder and writes `dist/SHA256SUMS.txt`. No supporting folder is
+needed beside this executable.
 
-Alternatively, place the project at the root of a GitHub repository and run
-**Actions → Build Windows app → Run workflow**. Download the Windows application
-from the workflow's **Artifacts** section. The workflow needs Actions enabled
-for the repository. Test the resulting app on Windows with your sample archive
-before distributing it to others.
+**Actions → Build Windows app → Run workflow** also builds it on Windows.
+New versions on `main` automatically become public GitHub Releases after all
+checks pass. The workflow never overwrites an already published version.
+See [Publishing a version](docs/releasing.md) for the version and changelog steps.
+Development builds are available as Actions artifacts; end users should use the
+direct **Download the Windows app** link above.
+
+Older, unversioned builds used a ZIP containing an EXE and `_internal` folder.
+That folder is required by those older builds. The new portable EXE includes
+those dependencies and can be kept on its own.
 
 ## Scope and limitations
 
-- The source archive and extracted mailbox are never changed. The app writes only to `%LOCALAPPDATA%/DesignStack/DovecotMailboxViewer`.
+- The source archive and extracted mailbox are never changed. Search caches and logs are stored in `%LOCALAPPDATA%/DesignStack/DovecotMailboxViewer`. The portable EXE also unpacks its runtime into a temporary folder; exports are written only where you choose to save them.
 - Recognises the dbox `m.*` container used by the supplied backup, including gzip-compressed message records and the `B<mailbox>` metadata. It discovers folders even if empty.
 - `B` metadata labels the mailbox in this sample. Supported transaction logs supply read/deleted flags, but main index snapshots and map indexes are not yet supported, so it does not promise authoritative state or folder placement for every Dovecot version. Treat ambiguous records as review material, not an exact live-mailbox reconstruction.
 - HTML messages render locally with external resources blocked by default. Loading external images is a per-message choice. Failed downloads keep the notice visible with a **Try again** link and diagnostic logging. Attachments are never run automatically.
@@ -73,6 +100,9 @@ before distributing it to others.
 - `viewer/mdbox.py` scans tar/folder inputs and yields validated message bytes and mailbox metadata.
 - `viewer/catalog.py` builds and queries a private SQLite catalogue and full-text index.
 - `viewer/app.py` contains the Qt interface and background import worker.
+- `viewer/version.py` is the single source for the app and release version.
+- `scripts/prepare_release.py` generates Windows version metadata and release notes.
+- `scripts/publish_release.py` publishes tested binaries through GitHub Releases.
 - `viewer/welcome.py` provides the startup guide and empty-state opening choices.
 - `viewer/html_preview.py` handles safe HTML previews and the optional image requests.
 - `tests/test_mdbox.py` tests dbox records without using private email fixtures.
