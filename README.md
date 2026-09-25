@@ -31,7 +31,15 @@ Check the installed version in **Help → About** or the EXE's Windows **Propert
 → Details**. Each release also includes `SHA256SUMS.txt` for checking its download.
 The **Source code** ZIP links on release pages are for developers.
 
-![Dovecot Mailbox Viewer welcome screen with Open Archive and Open Folder choices](docs/images/welcome-screen.png)
+## Screenshots
+
+**Welcome guide** — open a backup archive, choose an extracted folder or reopen a recent backup.
+
+![Dovecot Mailbox Viewer welcome guide with Open Archive, Open Folder and recently opened backups](docs/images/welcome-screen.png)
+
+**Mailbox view** — browse folders, filter unread mail and read HTML emails.
+
+![Dovecot Mailbox Viewer showing mailbox folders, Unread and All tabs, date-grouped messages and an HTML email preview](docs/images/mailbox-view.png)
 
 ## Export, print and save as PDF
 
