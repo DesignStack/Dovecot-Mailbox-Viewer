@@ -1,11 +1,14 @@
 """Plain-language onboarding shared by the welcome dialog and empty mailbox view."""
 from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QDialog, QFrame, QHBoxLayout, QLabel, QLayout, QPushButton, QScrollArea,
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from viewer.icons import line_icon
+from viewer.recent import dropped_backup
+from pathlib import Path
 
 
 class BackupChoices(QWidget):
@@ -98,6 +101,7 @@ WELCOME_STYLE = """
 class WelcomePage(QWidget):
     archive_requested = Signal()
     folder_requested = Signal()
+    recent_requested = Signal(str)
 
     def __init__(self, parent=None, dialog=False):
         super().__init__(parent)
@@ -131,7 +135,7 @@ class WelcomePage(QWidget):
         top.addLayout(wording, 1)
         body.addLayout(top)
         intro = QLabel('Read and search a saved mailbox backup on your computer. '
-                       'Choose what you have to get started.')
+                       'Choose what you have, or drag a backup file or folder into this window.')
         intro.setObjectName('welcomeIntro')
         intro.setWordWrap(True)
         body.addWidget(intro)
@@ -139,10 +143,11 @@ class WelcomePage(QWidget):
         self.choices.archive_requested.connect(self.archive_requested)
         self.choices.folder_requested.connect(self.folder_requested)
         body.addWidget(self.choices)
-        note = QLabel('Not sure? If you have one .tar.gz file, choose Open Archive.')
-        note.setObjectName('welcomeNote')
-        note.setWordWrap(True)
-        body.addWidget(note)
+        self.recent_box = QWidget()
+        self.recent_layout = QVBoxLayout(self.recent_box)
+        self.recent_layout.setContentsMargins(0, 0, 0, 0)
+        self.recent_box.hide()
+        body.addWidget(self.recent_box)
         steps = QFrame()
         steps.setObjectName('nextSteps')
         steps_layout = QVBoxLayout(steps)
@@ -175,14 +180,35 @@ class WelcomePage(QWidget):
         body.addWidget(reassurance)
         outer.addWidget(content, 0, Qt.AlignmentFlag.AlignHCenter)
 
+    def set_recent(self, entries):
+        while self.recent_layout.count():
+            item = self.recent_layout.takeAt(0)
+            item.widget().deleteLater()
+        if entries:
+            self.recent_layout.addWidget(QLabel('Recently opened'))
+        for entry in entries[:3]:
+            label = f"{Path(entry['path']).name} — {entry['account']}".replace('&', '&&')
+            button = QPushButton(label)
+            button.setText(QFontMetrics(button.font()).elidedText(label, Qt.TextElideMode.ElideMiddle, 490))
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            button.setIcon(line_icon('folder' if Path(entry['path']).is_dir() else 'archive'))
+            button.setToolTip(entry['path'])
+            button.setAutoDefault(False)
+            button.clicked.connect(lambda checked=False, path=entry['path']: self.recent_requested.emit(path))
+            self.recent_layout.addWidget(button)
+        self.recent_box.setVisible(bool(entries))
+
 
 class WelcomeDialog(QDialog):
     """One guided choice, then the familiar Windows file or folder picker."""
     archive_requested = Signal()
     folder_requested = Signal()
+    recent_requested = Signal(str)
+    backup_dropped = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setAcceptDrops(True)
         self.setObjectName('welcomeDialog')
         self.setWindowTitle('Welcome to Dovecot Mailbox Viewer')
         self.setWindowIcon(line_icon('mail', '#357ddb'))
@@ -200,6 +226,7 @@ class WelcomeDialog(QDialog):
         layout.addWidget(scroll, 1)
         self.page.archive_requested.connect(self.archive_requested)
         self.page.folder_requested.connect(self.folder_requested)
+        self.page.recent_requested.connect(self.recent_requested)
         footer = QHBoxLayout()
         footer.setContentsMargins(28, 0, 28, 18)
         footer.addStretch()
@@ -212,3 +239,13 @@ class WelcomeDialog(QDialog):
         available = self.screen().availableGeometry()
         self.resize(min(740, available.width() - 60), min(690, available.height() - 70))
         self.page.choices.archive_button.setFocus()
+
+    def dragEnterEvent(self, event):
+        if dropped_backup(event.mimeData()) is not None:
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        path = dropped_backup(event.mimeData())
+        if path is not None:
+            event.acceptProposedAction()
+            self.backup_dropped.emit(str(path))

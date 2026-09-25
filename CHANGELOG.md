@@ -5,6 +5,32 @@ with its own notes and Windows download. Earlier development builds were unversi
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-25
+
+### Added
+
+- Bulk `.eml` export for selected emails, an entire folder or all mail, with
+  progress and cancellation. Whole-folder exports include messages beyond the
+  list's 5,000-message display limit and ignore current search filters.
+- Ctrl/Shift multi-selection, preserved as indexing adds messages.
+- Drag-and-drop opening of one archive or extracted folder on the main window
+  or welcome guide.
+- Recent backups in the File menu and welcome screen, saved locally with an
+  option to clear the history without deleting backups or search caches.
+- Printing (Ctrl+P) and saving individual emails as PDF, including message
+  headers and attachment names. Only inline or already downloaded images are used.
+- Help → Check for updates, with an on-demand GitHub release check and a link
+  to the newer version's download page. No automatic installation or background checks.
+- File → Exit (Ctrl+Q), with the existing protection for an unfinished import
+  and a guard while an export is running.
+
+### Changed
+
+- Removed the repeated “Not sure? If you…” text from the welcome guide.
+- Added tests for exports over 5,000 messages, cancellation, filename conflicts,
+  recent history, drag and drop, PDF/print and update-check failures/timeouts.
+- The packaged Windows check now also verifies bulk export and PDF generation.
+
 ## [0.1.0] - 2026-09-25
 
 ### Added

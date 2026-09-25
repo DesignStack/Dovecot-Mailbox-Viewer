@@ -7,6 +7,7 @@ from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QImage, QImageReader, QTextDocument
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import QMessageBox, QTextBrowser
+from viewer.version import __version__
 
 MAX_IMAGE_BYTES = 5_000_000
 MAX_IMAGES = 30
@@ -122,7 +123,7 @@ class SafeHtmlPreview(QTextBrowser):
             self.pending.add(url)
             request = QNetworkRequest(QUrl(url))
             request.setTransferTimeout(15000)
-            request.setHeader(QNetworkRequest.KnownHeaders.UserAgentHeader, "Dovecot-Mailbox-Viewer/1.0")
+            request.setHeader(QNetworkRequest.KnownHeaders.UserAgentHeader, f"Dovecot-Mailbox-Viewer/{__version__}")
             request.setRawHeader(b"Accept", b"image/png,image/jpeg,image/gif,image/webp,image/*;q=0.8")
             request.setAttribute(QNetworkRequest.Attribute.RedirectPolicyAttribute,
                                  QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)

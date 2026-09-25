@@ -69,6 +69,7 @@ def describe(raw: bytes):
 
 class Catalogue:
     def __init__(self, file: Path):
+        self.path = file
         file.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(file)
         self.conn.execute("PRAGMA journal_mode=WAL")

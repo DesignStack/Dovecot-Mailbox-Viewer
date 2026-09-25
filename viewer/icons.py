@@ -28,6 +28,8 @@ PATHS = {
     "refresh": '<path d="M20 8a8 8 0 1 0 0 8M20 3v5h-5"/>',
     "download": '<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>',
     "info": '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.1"/>',
+    "print": '<path d="M6 8V3h12v5M6 17H3V8h18v9h-3M6 14h12v7H6ZM17 11h1"/>',
+    "exit": '<path d="M10 3H4v18h6M9 12h12m-4-4 4 4-4 4"/>',
     "file": '<path d="M5 2h9l5 5v15H5ZM14 2v6h5"/>',
     "file_word": '<path d="M5 2h9l5 5v15H5ZM14 2v6h5M8 12l1 6 3-4 3 4 1-6"/>',
     "file_sheet": '<path d="M5 2h9l5 5v15H5ZM14 2v6h5M8 11h8v8H8ZM8 15h8M12 11v8"/>',

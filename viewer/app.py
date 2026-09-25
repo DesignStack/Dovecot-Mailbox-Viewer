@@ -13,8 +13,9 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar, QSplitter, QInputDialog,
-    QScrollArea, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+    QScrollArea, QStackedWidget, QToolButton, QVBoxLayout, QWidget, QProgressDialog,
 )
+from PySide6.QtPrintSupport import QPrintDialog
 
 from viewer.catalog import Catalogue, cache_path, describe, source_fingerprint
 from viewer.html_preview import SafeHtmlPreview, MAX_IMAGES
@@ -25,6 +26,10 @@ from viewer.welcome import WelcomeDialog, WelcomePage
 from viewer.mdbox import discover, read_account
 from viewer.dovecot_index import read_statuses, SEEN, DELETED
 from viewer.version import __version__
+from viewer.recent import RecentBackups, dropped_backup
+from viewer.exporting import ExportWorker, safe_name
+from viewer.printing import MailPrintDocument, make_printer, save_pdf, print_document
+from viewer.updates import UpdateDialog
 
 
 def log_path() -> Path:
@@ -145,7 +150,7 @@ class ImportWorker(QObject):
 
 
 class Window(QMainWindow):
-    def __init__(self, *, show_welcome=True):
+    def __init__(self, *, show_welcome=True, settings=None):
         super().__init__()
         self.setWindowTitle("Dovecot Mailbox Viewer")
         self.setWindowIcon(app_icon())
@@ -163,6 +168,11 @@ class Window(QMainWindow):
         self._welcome_enabled = show_welcome
         self._startup_welcome_scheduled = False
         self._import_error_visible = False
+        self.recent_backups = RecentBackups(settings)
+        self.export_worker = None
+        self.export_progress = None
+        self.update_dialog = None
+        self.setAcceptDrops(True)
 
         # Avoid a blanket QWidget background: it paints white rectangles behind
         # labels in coloured containers, including the remote-image notice.
@@ -219,7 +229,17 @@ class Window(QMainWindow):
         self.export_action.triggered.connect(self.export_eml)
         self.images_action = QAction(line_icon("image"), "Download images", self)
         self.images_action.triggered.connect(self.download_images)
-        for action in (self.attachment_action, self.export_action, self.images_action):
+        self.bulk_export_action = QAction(line_icon("export"), "Export selected emails…", self)
+        self.bulk_export_action.triggered.connect(self.export_selected)
+        self.folder_export_action = QAction(line_icon("folder"), "Export entire folder…", self)
+        self.folder_export_action.triggered.connect(self.export_folder)
+        self.pdf_action = QAction(line_icon("file_pdf"), "Save email as PDF…", self)
+        self.pdf_action.triggered.connect(self.export_pdf)
+        self.print_action = QAction(line_icon("print"), "Print email…", self)
+        self.print_action.setShortcut("Ctrl+P")
+        self.print_action.triggered.connect(self.print_email)
+        for action in (self.attachment_action, self.export_action, self.images_action,
+                       self.bulk_export_action, self.folder_export_action, self.pdf_action, self.print_action):
             action.setEnabled(False)
         open_archive = QAction(line_icon("archive"), "Open archive…", self)
         open_archive.setShortcut("Ctrl+O")
@@ -232,13 +252,26 @@ class Window(QMainWindow):
         open_log.triggered.connect(self.open_log)
         file_menu = self.menuBar().addMenu("File")
         file_menu.addActions([open_archive, open_folder])
+        self.recent_menu = file_menu.addMenu("Recent backups")
         file_menu.addSeparator()
-        file_menu.addActions([self.export_action, clear_cache, open_log])
+        file_menu.addActions([self.export_action, self.bulk_export_action, self.folder_export_action])
+        file_menu.addSeparator()
+        file_menu.addActions([self.pdf_action, self.print_action])
+        file_menu.addSeparator()
+        file_menu.addActions([clear_cache, open_log])
+        file_menu.addSeparator()
+        self.exit_action = QAction(line_icon("exit"), "Exit", self)
+        self.exit_action.setShortcut("Ctrl+Q")
+        self.exit_action.triggered.connect(self.close)
+        file_menu.addAction(self.exit_action)
         help_menu = self.menuBar().addMenu("Help")
         self.getting_started_action = QAction(line_icon("mail"), "Getting started…", self)
         self.getting_started_action.triggered.connect(self.show_welcome)
         help_menu.addAction(self.getting_started_action)
         help_menu.addSeparator()
+        self.updates_action = QAction(line_icon("refresh"), "Check for updates…", self)
+        self.updates_action.triggered.connect(self.check_updates)
+        help_menu.addAction(self.updates_action)
         self.contact_action = QAction(line_icon("mail"), "Contact author", self)
         self.contact_action.triggered.connect(self.contact_author)
         self.about_action = QAction(line_icon("info"), "About", self)
@@ -323,6 +356,9 @@ class Window(QMainWindow):
         self.listing.setObjectName("messages")
         self.listing.setAccessibleName("Emails")
         self.listing.setItemDelegate(MessageDelegate(self.listing))
+        self.listing.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.listing.setToolTip("Use Ctrl or Shift to select several emails, then File → Export selected emails.")
+        self.listing.itemSelectionChanged.connect(self.update_export_actions)
         self.listing.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.listing.currentItemChanged.connect(self.show_message)
         middle_layout.addWidget(self.listing, 1)
@@ -349,6 +385,8 @@ class Window(QMainWindow):
         self.more_button.setObjectName("emailActions")
         self.message_menu = QMenu(self.more_button)
         self.message_menu.addActions([self.attachment_action, self.export_action, self.images_action])
+        self.message_menu.addSeparator()
+        self.message_menu.addActions([self.pdf_action, self.print_action])
         self.more_button.setMenu(self.message_menu)
         self.more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         title_row.addWidget(self.more_button, 0, Qt.AlignmentFlag.AlignTop)
@@ -410,6 +448,7 @@ class Window(QMainWindow):
         self.empty_page = WelcomePage()
         self.empty_page.archive_requested.connect(self.open_archive)
         self.empty_page.folder_requested.connect(self.open_folder)
+        self.empty_page.recent_requested.connect(self.open_recent)
         self.empty_view = QScrollArea()
         self.empty_view.setWidgetResizable(True)
         self.empty_view.setFrameShape(QFrame.Shape.NoFrame)
@@ -429,6 +468,54 @@ class Window(QMainWindow):
         self.statusBar().addPermanentWidget(self.activity)
         self.statusBar().addPermanentWidget(self.progress_bar)
         self.statusBar().showMessage("Local, read-only backup viewer")
+        self.preview.setAcceptDrops(False)
+        self.refresh_recent()
+
+    def refresh_recent(self):
+        entries = self.recent_backups.entries()
+        self.recent_menu.clear()
+        for entry in entries:
+            action = self.recent_menu.addAction(f"{Path(entry['path']).name} — {entry['account']}".replace('&', '&&'))
+            action.setToolTip(entry['path'])
+            action.triggered.connect(lambda checked=False, path=entry['path']: self.open_recent(path))
+        if entries:
+            self.recent_menu.addSeparator()
+            self.recent_menu.addAction("Clear recent backups", self.clear_recent)
+        else:
+            self.recent_menu.addAction("No recent backups").setEnabled(False)
+        self.empty_page.set_recent(entries)
+        if self.welcome_dialog is not None:
+            self.welcome_dialog.page.set_recent(entries)
+
+    def clear_recent(self):
+        self.recent_backups.clear()
+        self.refresh_recent()
+
+    def open_recent(self, path):
+        if not Path(path).exists():
+            QMessageBox.information(self._opening_parent(), "Backup not found",
+                                    "This backup has moved or is unavailable. Use Open Archive or Open Folder to find it again.")
+            return
+        self.open_source(Path(path))
+
+    def dragEnterEvent(self, event):
+        if self.worker_thread is None and self.export_worker is None and dropped_backup(event.mimeData()) is not None:
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        path = dropped_backup(event.mimeData())
+        if path is not None and self.worker_thread is None and self.export_worker is None:
+            event.acceptProposedAction()
+            self.open_source(path)
+
+    def check_updates(self):
+        if self.update_dialog is None:
+            self.update_dialog = UpdateDialog(self)
+        if self.update_dialog.isVisible():
+            self.update_dialog.activateWindow()
+            return
+        self.update_dialog.open()
+        self.update_dialog.check()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -450,6 +537,9 @@ class Window(QMainWindow):
             self.welcome_dialog = WelcomeDialog(self)
             self.welcome_dialog.archive_requested.connect(self.open_archive)
             self.welcome_dialog.folder_requested.connect(self.open_folder)
+            self.welcome_dialog.recent_requested.connect(self.open_recent)
+            self.welcome_dialog.backup_dropped.connect(lambda path: self.open_source(Path(path)))
+        self.welcome_dialog.page.set_recent(self.recent_backups.entries())
         if self.welcome_dialog.isVisible():
             self.welcome_dialog.activateWindow()
             return
@@ -570,8 +660,9 @@ class Window(QMainWindow):
         self.details.clear()
         self.avatar.hide()
         self.preview.display("", EmailMessage())
-        for action in (self.attachment_action, self.export_action, self.images_action):
+        for action in (self.attachment_action, self.export_action, self.images_action, self.pdf_action, self.print_action):
             action.setEnabled(False)
+        self.update_export_actions()
 
     def open_archive(self):
         name, _ = QFileDialog.getOpenFileName(self._opening_parent(), "Choose your mailbox backup file", "", "Mailbox backups (*.tar.gz *.tgz)")
@@ -586,6 +677,9 @@ class Window(QMainWindow):
         return False
 
     def open_source(self, source: Path):
+        if self.export_worker is not None:
+            QMessageBox.information(self, "Export in progress", "Finish or cancel the current export before opening another backup.")
+            return False
         if self.worker_thread and self.worker_thread.isRunning():
             QMessageBox.information(self, "Indexing", "Please wait for indexing to finish.")
             return False
@@ -679,6 +773,7 @@ class Window(QMainWindow):
         self.worker = None
         self.worker_thread.deleteLater()
         self.worker_thread = None
+        self.update_export_actions()
         if self.catalogue is None:
             self._show_empty_page()
 
@@ -702,6 +797,9 @@ class Window(QMainWindow):
         if self.catalogue is None:
             self.catalogue = Catalogue(self.pending_database)
         self.populate_folders(count)
+        if self.source is not None:
+            self.recent_backups.remember(self.source, self.account_name)
+            self.refresh_recent()
 
     def populate_folders(self, count):
         self.content_stack.setCurrentWidget(self.panes)
@@ -763,6 +861,7 @@ class Window(QMainWindow):
             return
         previous = self.listing.currentItem()
         selected_id = previous.data(Qt.ItemDataRole.UserRole) if previous else None
+        selected_ids = {item.data(Qt.ItemDataRole.UserRole) for item in self.listing.selectedItems()}
         scroll_position = self.listing.verticalScrollBar().value()
         self.listing.blockSignals(True)
         self.listing.clear()
@@ -790,12 +889,19 @@ class Window(QMainWindow):
                     break
         if self.listing.currentItem() is None and rows:
             self.listing.setCurrentRow(0)
+        surviving = [self.listing.item(index) for index in range(self.listing.count())
+                     if self.listing.item(index).data(Qt.ItemDataRole.UserRole) in selected_ids]
+        if surviving:
+            self.listing.clearSelection()
+            for item in surviving:
+                item.setSelected(True)
         self.listing.verticalScrollBar().setValue(scroll_position)
         self.listing.blockSignals(False)
         label = (selected.data(DETAILS_ROLE) or {}).get("label", "All mail") if selected else "All mail"
         self.folder_title.setText("Search results" if self.search.text() or any(self.search_options.values()) else label)
         self.message_count.setText(str(len(rows)))
         self.show_message()
+        self.update_export_actions()
         self.statusBar().showMessage(f"Showing {len(rows)} messages" + (" (first 5,000)" if len(rows) == 5000 else ""))
 
     def show_message(self, _=None):
@@ -830,6 +936,128 @@ class Window(QMainWindow):
         self.attachment_action.setText(f"Save attachment… ({len(self.attachments)})" if self.attachments else "Save attachment…")
         self.attachment_action.setEnabled(bool(self.attachments))
         self.export_action.setEnabled(True)
+        self.pdf_action.setEnabled(True)
+        self.print_action.setEnabled(True)
+
+    def update_export_actions(self):
+        count = len(self.listing.selectedItems()) if self.catalogue else 0
+        self.bulk_export_action.setText(f"Export selected emails… ({count})" if count else "Export selected emails…")
+        self.bulk_export_action.setEnabled(count > 0 and self.export_worker is None)
+        folder = self.folders.currentItem()
+        folder_count = (folder.data(DETAILS_ROLE) or {}).get('count', 0) if folder else 0
+        all_mail = folder is not None and folder.data(Qt.ItemDataRole.UserRole) is None
+        self.folder_export_action.setText("Export all mail…" if all_mail else "Export entire folder…")
+        self.folder_export_action.setEnabled(bool(self.catalogue and folder_count and self.worker_thread is None
+                                                  and self.export_worker is None))
+
+    def export_selected(self):
+        ids = [item.data(Qt.ItemDataRole.UserRole) for item in self.listing.selectedItems()]
+        if ids:
+            self.start_export(ids=ids)
+
+    def export_folder(self):
+        if self.worker_thread is not None:
+            QMessageBox.information(self, "Indexing", "Wait for indexing to finish to export the complete folder.")
+            return
+        selected = self.folders.currentItem()
+        if selected:
+            self.start_export(folder=selected.data(Qt.ItemDataRole.UserRole))
+
+    def start_export(self, *, ids=None, folder=None):
+        if not self.catalogue or self.export_worker is not None:
+            return
+        title = "Choose where to save selected emails" if ids is not None else "Choose where to save the entire folder (all emails)"
+        destination = QFileDialog.getExistingDirectory(self, title)
+        if not destination:
+            return
+        if self.source is not None and self.source.is_dir() and Path(destination).resolve().is_relative_to(self.source.resolve()):
+            QMessageBox.information(self, "Choose another folder", "Choose a destination outside the original backup to keep it unchanged.")
+            return
+        worker = ExportWorker(self.catalogue.path, Path(destination), ids=ids, folder=folder, parent=self)
+        self.export_worker = worker
+        self._export_result = None
+        self.export_progress = QProgressDialog("Preparing email export…", "Cancel", 0, 0, self)
+        self.export_progress.setWindowTitle("Export emails")
+        self.export_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.export_progress.setAutoClose(False)
+        self.export_progress.setAutoReset(False)
+        self.export_progress.canceled.connect(worker.requestInterruption)
+        worker.progress.connect(self.export_progress_changed)
+        worker.completed.connect(self.export_completed)
+        worker.failed.connect(self.export_failed)
+        worker.finished.connect(self.export_finished)
+        self.update_export_actions()
+        self.export_progress.show()
+        worker.start()
+
+    @Slot(int, int)
+    def export_progress_changed(self, done, total):
+        if self.export_progress and not self.export_progress.wasCanceled():
+            self.export_progress.setRange(0, max(total, 1))
+            self.export_progress.setValue(done)
+            self.export_progress.setLabelText(f"Saving emails… {done:,} of {total:,}")
+
+    @Slot(str, int, bool)
+    def export_completed(self, path, count, cancelled):
+        self._export_result = (path, count, cancelled)
+
+    @Slot(str)
+    def export_failed(self, message):
+        self._export_result = message
+
+    @Slot()
+    def export_finished(self):
+        worker, self.export_worker = self.export_worker, None
+        worker.deleteLater()
+        self.export_progress.close()
+        self.export_progress.deleteLater()
+        self.export_progress = None
+        self.update_export_actions()
+        if isinstance(self._export_result, tuple):
+            path, count, cancelled = self._export_result
+            title = "Export cancelled" if cancelled else "Export complete"
+            text = f"{count:,} emails saved in:\n{path}"
+            if cancelled:
+                text += "\n\nThe emails already saved have been kept."
+            QMessageBox.information(self, title, text)
+        else:
+            QMessageBox.warning(self, "Export stopped", self._export_result or "The export did not finish.")
+
+    def print_document(self):
+        item = self.listing.currentItem()
+        if item is None or self.catalogue is None:
+            return None
+        row = self.catalogue.message(item.data(Qt.ItemDataRole.UserRole))
+        message, _, _, _ = describe(row['raw'])
+        return MailPrintDocument(self.preview, message, [part.filename for part in self.attachments])
+
+    def export_pdf(self):
+        document = self.print_document()
+        if document is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save email as PDF", safe_name(self.heading.text()) + '.pdf', "PDF files (*.pdf)")
+        if not path:
+            return
+        if not path.lower().endswith('.pdf'):
+            path += '.pdf'
+        try:
+            save_pdf(document, path, self.heading.text())
+            self.statusBar().showMessage(f"Saved {path}", 10000)
+        except OSError as exc:
+            QMessageBox.warning(self, "Cannot save PDF", str(exc))
+
+    def print_email(self):
+        document = self.print_document()
+        if document is None:
+            return
+        printer = make_printer(self.heading.text())
+        dialog = QPrintDialog(printer, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            print_document(document, printer)
+            if printer.printerState() == printer.PrinterState.Error:
+                QMessageBox.warning(self, "Printing failed", "The printer reported an error. Please check the printer and try again.")
+            else:
+                self.statusBar().showMessage("Email sent to the printer", 5000)
 
     def export_eml(self):
         item = self.listing.currentItem()
@@ -875,6 +1103,9 @@ class Window(QMainWindow):
                 QMessageBox.critical(self, "Cannot save attachment", str(exc))
 
     def clear_cache(self):
+        if self.export_worker is not None:
+            QMessageBox.information(self, "Export in progress", "Finish or cancel the export before clearing its search cache.")
+            return
         if not self.source or not self.account_name:
             return
         if self.worker_thread and self.worker_thread.isRunning():
@@ -899,6 +1130,10 @@ class Window(QMainWindow):
         self.statusBar().showMessage("Cache removed; original backup unchanged")
 
     def closeEvent(self, event):
+        if self.export_worker is not None:
+            QMessageBox.information(self, "Export in progress", "Finish or cancel the export before closing.")
+            event.ignore()
+            return
         if self.worker_thread and self.worker_thread.isRunning():
             QMessageBox.information(self, "Indexing", "Please let indexing finish before closing.")
             event.ignore()
@@ -907,6 +1142,8 @@ class Window(QMainWindow):
             self.catalogue.close()
         if self.welcome_dialog is not None:
             self.welcome_dialog.reject()
+        if self.update_dialog is not None:
+            self.update_dialog.reject()
         self.reset_preview()
         event.accept()
 

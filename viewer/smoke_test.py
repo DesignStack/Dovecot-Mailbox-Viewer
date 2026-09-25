@@ -15,6 +15,8 @@ from PySide6.QtCore import qVersion
 from PySide6.QtNetwork import QSslSocket
 
 from viewer.version import __version__
+from viewer.printing import save_pdf
+from viewer.exporting import export_messages
 
 
 def run(app, window_class, report_path: Path) -> int:
@@ -50,6 +52,12 @@ def run(app, window_class, report_path: Path) -> int:
             app.processEvents()
             assert "Portable mailbox check" in window.preview.toPlainText(), "HTML preview failed"
             assert len(window.catalogue.messages(None, "Portable")) == 1, "Search failed"
+            pdf = root / 'printed-email.pdf'
+            save_pdf(window.print_document(), pdf, 'Portable check')
+            assert pdf.read_bytes().startswith(b'%PDF-'), 'PDF export failed'
+            exported, count, cancelled = export_messages(window.catalogue.path, root, folder='INBOX')
+            assert count == 1 and not cancelled, 'Bulk export failed'
+            assert next(exported.rglob('*.eml')).read_bytes() == raw, 'Exported email differs from original'
             assert (storage / "m.1").read_bytes() == record, "Source backup was changed"
             # Remove only the derived synthetic cache, then close before temp cleanup.
             window.clear_cache()

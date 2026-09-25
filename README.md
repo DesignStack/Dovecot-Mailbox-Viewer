@@ -13,8 +13,16 @@ It may take a few seconds to open while it automatically unpacks support files
 into a temporary folder, which is normally removed when the app closes.
 
 Choose **Open Archive** or **Open Folder** in the welcome guide to get started.
+You can also drag a `.tar.gz`, `.tgz` or extracted folder onto the app or welcome
+window. **File → Recent backups** and the welcome screen let you reopen recent
+backups. The history stays on your computer; **Clear recent backups** removes
+only the history, not the original files or search caches.
+
 To update, close the app and replace your old EXE with the new download. Your
 original backup and reusable search cache are kept separately.
+**Help → Check for updates** checks GitHub only when you request it and opens
+the release page if a newer version is available. It does not send your emails,
+account names or backup paths, and does not download or install updates automatically.
 
 [Release notes and older downloads](https://github.com/DesignStack/Dovecot-Mailbox-Viewer/releases)
 · [Changelog](CHANGELOG.md)
@@ -24,6 +32,30 @@ Check the installed version in **Help → About** or the EXE's Windows **Propert
 The **Source code** ZIP links on release pages are for developers.
 
 ![Dovecot Mailbox Viewer welcome screen with Open Archive and Open Folder choices](docs/images/welcome-screen.png)
+
+## Export, print and save as PDF
+
+- **One email:** use the email's three-dot menu or File → Export email as .eml.
+- **Several emails:** hold Ctrl or Shift to select messages, then choose
+  **File → Export selected emails**. Ctrl+A selects the emails currently listed.
+- **A complete folder:** select it on the left, then choose **File → Export entire
+  folder**. With All mail selected, the action becomes **Export all mail**.
+  These exports ignore search filters and the list's 5,000-message display limit.
+  Wait for indexing to finish before exporting a complete folder.
+
+Bulk exports create a new `Mail-export-…` folder at your chosen destination,
+with a separate subfolder for each mailbox folder and the original `.eml` bytes.
+Filenames are made safe for Windows. Existing exports are never overwritten.
+The progress window offers Cancel; completed emails are kept if you cancel.
+
+Use **Save email as PDF** or **Print email** from File or the email's three-dot
+menu. **Ctrl+P** opens the print dialogue. The output includes the subject,
+sender, recipients, date, attachment names and email body. Attachments themselves
+are saved separately; they are not embedded in the PDF. Printing does not download
+remote images: use Download images first if you want them included.
+
+**File → Exit** or **Ctrl+Q** closes the app. Finish indexing or finish/cancel
+any running export first.
 
 ## Run from source
 
@@ -101,6 +133,10 @@ those dependencies and can be kept on its own.
 - `viewer/catalog.py` builds and queries a private SQLite catalogue and full-text index.
 - `viewer/app.py` contains the Qt interface and background import worker.
 - `viewer/version.py` is the single source for the app and release version.
+- `viewer/exporting.py` streams complete or selected email exports on a worker thread.
+- `viewer/printing.py` prepares safe email printouts and PDF exports.
+- `viewer/recent.py` keeps local backup history and validates dropped paths.
+- `viewer/updates.py` checks GitHub releases only on request.
 - `scripts/prepare_release.py` generates Windows version metadata and release notes.
 - `scripts/publish_release.py` publishes tested binaries through GitHub Releases.
 - `viewer/welcome.py` provides the startup guide and empty-state opening choices.
