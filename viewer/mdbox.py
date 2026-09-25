@@ -1,8 +1,8 @@
 """Stream dbox storage records from an archive or an extracted directory.
 
-This parser deliberately avoids reverse engineering the binary Dovecot indexes.
-The per-record B field works for the supplied JetBackup sample; absent metadata
-is surfaced as Unfiled rather than silently guessing a mailbox.
+This module handles message framing; binary status indexes are read separately.
+The per-record B field supplies a fallback folder when no reliable GUID mapping
+is available. Missing metadata is surfaced as Unfiled rather than guessed.
 """
 
 from dataclasses import dataclass, replace
@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 import re
 import tarfile
 import zlib
+from viewer.operations import CheckedReader
 
 HEADER = re.compile(rb"\x01\x02([NP]) +([0-9a-fA-F]{1,16})\r?\n")
 FOOTER = b"\n\x01\x03\n"
@@ -37,48 +38,50 @@ def _account_name(root: tuple[str, ...]) -> str:
     return f"{root[-1]}@{root[-2]}" if len(root) >= 2 else "/".join(root)
 
 
-def discover(path: Path) -> dict[str, dict]:
-    """Return account names with storage entries and all named mailbox folders."""
-    result: dict[str, dict] = {}
+def discover(path: Path, check=lambda: None) -> dict[str, dict]:
+    """Scan paths off the GUI thread, sequentially for compressed archives."""
     if path.is_dir():
-        entries = ((tuple(p.relative_to(path).parts), p) for p in path.rglob("*"))
-    elif tarfile.is_tarfile(path):
-        with tarfile.open(path, "r:gz") as tf:
-            return _discover_entries((tuple(PurePosixPath(m.name).parts), m.name, m.isdir()) for m in tf.getmembers() if m.isfile() or m.isdir())
-    else:
-        raise ValueError("Choose a .tar.gz backup or an extracted directory.")
-    return _discover_entries((parts, str(p), p.is_dir()) for parts, p in entries)
+        def entries():
+            for p in path.rglob("*"):
+                check()
+                if p.is_file() or p.is_dir():
+                    yield tuple(p.relative_to(path).parts), str(p), p.is_dir(), p.stat().st_size
+        return _discover_entries(entries())
+    with path.open('rb') as raw, tarfile.open(fileobj=CheckedReader(raw, check), mode='r|gz') as tf:
+        return _discover_entries((tuple(PurePosixPath(m.name).parts), m.name, m.isdir(), m.size)
+                                 for m in tf if m.isfile() or m.isdir())
 
 
 def _discover_entries(entries):
-    result: dict[str, dict] = {}
+    result = {}
     all_entries = list(entries)
-    for parts, name, is_dir in all_entries:
+    for parts, name, is_dir, size in all_entries:
         root = _root_parts(parts)
         if root is not None and not is_dir:
             account = _account_name(root)
-            info = result.setdefault(account, {"root": root, "storage": [], "folders": set()})
+            info = result.setdefault(account, {"root": root, "storage": [], "sizes": {}, "folders": set()})
             info["storage"].append(name)
-    for parts, _, _ in all_entries:
+            info["sizes"][name] = size
+    for parts, _, is_dir, _ in all_entries:
         for info in result.values():
             root = info["root"]
-            if parts[: len(root) + 1] == root + ("mailboxes",) and len(parts) > len(root) + 1:
-                tail = parts[len(root) + 1 :]
-                if tail[0] != "dovecot-acl-list":
-                    folder = tail[:-1] if tail[-1] == "dbox-Mails" else tail
-                    if "dbox-Mails" in folder:
-                        folder = folder[: folder.index("dbox-Mails")]
-                    if folder and not folder[0].startswith("dovecot"):
-                        info["folders"].add("/".join(folder))
+            if parts[:len(root)+1] != root + ("mailboxes",):
+                continue
+            tail = parts[len(root)+1:]
+            marker = next((i for i, part in enumerate(tail) if part.casefold() in ('dbox-mails', 'dbox-mail')), None)
+            folder = tail[:marker] if marker is not None else (tail if is_dir else ())
+            if folder and not folder[0].startswith('dovecot'):
+                info["folders"].add('/'.join(folder))
     return result
 
 
-def records(stream, source: str):
+def records(stream, source: str, check=lambda: None):
     """Yield complete message records, validating framing and gzip streams."""
     first = stream.readline(200)
     if not first.startswith(b"2 "):
         raise ValueError(f"{source}: unsupported dbox storage header")
     while True:
+        check()
         line = stream.readline(200)
         if not line:
             break
@@ -117,28 +120,26 @@ def records(stream, source: str):
         yield Record(attributes.get(b"B") or "Unfiled", raw, source, guid=guid)
 
 
-def read_account(path: Path, info: dict):
-    """Open only selected storage members; never extract tar paths to disk."""
+def read_account(path: Path, info: dict, check=lambda: None):
+    """Read tar members in physical order to avoid repeated gzip decompression."""
+    completed = 0
     if path.is_dir():
         total = sum(Path(name).stat().st_size for name in info["storage"])
-        completed = 0
         for name in sorted(info["storage"]):
+            check()
             with open(name, "rb") as stream:
-                for record in records(stream, name):
+                for record in records(stream, name, check):
                     yield replace(record, bytes_done=completed + stream.tell(), bytes_total=total)
             completed += Path(name).stat().st_size
     else:
-        with tarfile.open(path, "r:gz") as tf:
-            total = sum(tf.getmember(name).size for name in info["storage"])
-            completed = 0
-            for name in sorted(info["storage"]):
-                member = tf.getmember(name)
-                if not member.isfile():
+        names = set(info['storage'])
+        total = sum(info.get('sizes', {}).values())
+        with path.open('rb') as raw, tarfile.open(fileobj=CheckedReader(raw, check), mode='r|gz') as tf:
+            for member in tf:
+                check()
+                if not member.isfile() or member.name not in names:
                     continue
-                stream = tf.extractfile(member)
-                if stream is None:
-                    continue
-                with stream:
-                    for record in records(stream, name):
-                        yield replace(record, bytes_done=completed + stream.tell(), bytes_total=total)
+                with tf.extractfile(member) as stream:
+                    for record in records(stream, member.name, check):
+                        yield replace(record, bytes_done=completed + stream.tell(), bytes_total=max(total, member.size))
                 completed += member.size

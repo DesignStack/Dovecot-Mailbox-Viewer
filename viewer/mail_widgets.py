@@ -1,6 +1,7 @@
 """Paint mail rows with separate text styles and responsive, elided columns."""
-from PySide6.QtCore import QRect, QSize, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon
+from PySide6.QtCore import QRect, QSize, Qt, QPointF
+import re
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QTextLayout
 from PySide6.QtWidgets import QStyle, QStyledItemDelegate
 
 from viewer.icons import line_icon
@@ -65,7 +66,25 @@ class MessageDelegate(QStyledItemDelegate):
             painter.setFont(font)
             painter.setPen(QColor(colour))
             value = QFontMetrics(font).elidedText(value, Qt.TextElideMode.ElideRight, max(0, rect.width()))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignVCenter, value)
+            terms = re.findall(r'\w+', data.get('highlight', ''))
+            if not terms:
+                painter.drawText(rect, Qt.AlignmentFlag.AlignVCenter, value)
+                return
+            layout = QTextLayout(value, font)
+            formats = []
+            for match in re.finditer('|'.join(re.escape(t) for t in dict.fromkeys(terms)), value, re.IGNORECASE):
+                mark = QTextLayout.FormatRange()
+                mark.start = len(value[:match.start()].encode('utf-16-le')) // 2
+                mark.length = len(match.group().encode('utf-16-le')) // 2
+                mark.format.setBackground(QColor('#ffdf89'))
+                mark.format.setForeground(QColor('#292d33'))
+                formats.append(mark)
+            layout.setFormats(formats)
+            layout.beginLayout()
+            line = layout.createLine()
+            line.setLineWidth(rect.width())
+            layout.endLayout()
+            layout.draw(painter, QPointF(rect.x(), rect.y() + (rect.height() - line.height()) / 2))
 
         if data.get("unread"):
             painter.setPen(Qt.PenStyle.NoPen)

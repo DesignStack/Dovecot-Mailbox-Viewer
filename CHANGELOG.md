@@ -5,6 +5,46 @@ with its own notes and Windows download. Earlier development builds were unversi
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-25
+
+### Added
+
+- Date, sender and subject sorting, plus pagination with 100/200/500 emails per
+  page so every message is browsable beyond the previous 5,000-message limit.
+- Optional conversation view using Message-ID/References/In-Reply-To relationships,
+  with chronological navigation across folders and complete conversation export.
+- Search highlighting in message rows and the reader; Find in email (Ctrl+G),
+  next/previous matches (F3/Shift+F3), HTML/plain-text selection and reading zoom.
+- Original headers window with Copy all, and Save all attachments with collision-safe
+  filenames in a fresh output folder.
+- Settings for reading, sorting, conversations, page size, highlighting, local
+  recent-backup history and remembering window/panel sizes.
+- Cache manager showing saved indexes, source paths, disk usage and completion state,
+  with selected-cache removal that preserves original backups and other app files.
+- Support for validated little-endian Dovecot 7.x GUID index snapshots, 1.0–1.3
+  transaction logs, contiguous rotated logs, batched records and protected expunges.
+
+### Changed
+
+- Discovery, cache validation and indexing run off the GUI thread, with immediate
+  activity feedback, cancellation and safe stopping when the window is closed.
+- Compressed archives are read in physical order, avoiding repeated gzip seeks.
+  Recently opened unchanged archives can skip discovery and reuse their saved index.
+- Known Dovecot GUID mappings take precedence over stored fallback folder metadata.
+  Unsupported/incomplete/ambiguous index state stays unknown instead of being guessed.
+- Cancelled imports keep committed messages available, but cannot be mistaken for
+  complete caches or used for whole-folder export until rebuilt.
+- Older caches rebuild once to add normalised timestamps and conversation links.
+- Single-email export and printing follow the displayed conversation message.
+- Added regression coverage for pagination beyond 5,000 messages, late-parent
+  threading, snapshot/log replay, cancellation, cache reuse/removal and reading tools.
+
+### Remaining limitations
+
+- Conversation grouping depends on usable message relationship headers.
+- Separate mdbox map indexes and unsupported Dovecot layouts are not interpreted.
+- Complex HTML email styling can differ from a web browser.
+
 ## [0.2.0] - 2026-09-25
 
 ### Added

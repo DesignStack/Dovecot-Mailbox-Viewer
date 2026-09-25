@@ -73,6 +73,7 @@ class WelcomeTests(unittest.TestCase):
              patch('viewer.app.QFileDialog.getExistingDirectory', return_value=temp), \
              patch('viewer.app.QMessageBox.critical') as error:
             guide.page.choices.folder_button.click()
+            self.wait_for_import()
             self.assertIn('No supported mailbox', error.call_args.args[2])
         self.assertTrue(guide.isVisible())
         self.assertIsNone(w.catalogue)
@@ -109,6 +110,7 @@ class WelcomeTests(unittest.TestCase):
                         # Reopen the same backup through the guide: use the cache.
                         w.show_welcome()
                         button.click()
+                        self.wait_for_import()
                         self.assertIsNone(w.worker_thread)
                         self.assertFalse(w.welcome_dialog.isVisible())
                         self.assertIn('cached', w.activity.text())

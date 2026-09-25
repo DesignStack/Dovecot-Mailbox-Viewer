@@ -40,7 +40,7 @@ The **Source code** ZIP links on release pages are for developers.
   **File → Export selected emails**. Ctrl+A selects the emails currently listed.
 - **A complete folder:** select it on the left, then choose **File → Export entire
   folder**. With All mail selected, the action becomes **Export all mail**.
-  These exports ignore search filters and the list's 5,000-message display limit.
+  These exports ignore search filters and include every page.
   Wait for indexing to finish before exporting a complete folder.
 
 Bulk exports create a new `Mail-export-…` folder at your chosen destination,
@@ -54,8 +54,43 @@ sender, recipients, date, attachment names and email body. Attachments themselve
 are saved separately; they are not embedded in the PDF. Printing does not download
 remote images: use Download images first if you want them included.
 
-**File → Exit** or **Ctrl+Q** closes the app. Finish indexing or finish/cancel
-any running export first.
+**File → Exit** or **Ctrl+Q** closes the app, safely stopping an ongoing import.
+Finish or cancel a running export first.
+
+## Browse, sort and read
+
+- Use the sort selector above the message list for **Newest first**, **Oldest first**,
+  **Sender A–Z/Z–A** or **Subject A–Z/Z–A**. Date sorting uses the email's actual
+  timestamp, including its time zone; missing dates appear last.
+- Page controls below the list let you browse every email. There is no 5,000-message
+  cutoff. **View → Settings** offers 100, 200 or 500 messages per page.
+- Enable **View → Conversation view** to group replies. A selector above the email
+  body opens individual messages in chronological order, including related messages
+  in other folders. Grouping uses Message-ID, References and In-Reply-To headers;
+  matching subjects alone do not combine unrelated emails. The list respects your
+  current folder/search; the conversation selector shows the whole related thread.
+- Search matches are highlighted in the message list and email body. **Ctrl+F** opens
+  mailbox search options; **Ctrl+G** opens Find within the displayed email.
+  Use **F3 / Shift+F3** for the next/previous match.
+- Reading controls offer **HTML view / Plain text** and **60–200% text zoom**.
+- The email's **three-dot menu → View original headers** shows the original header
+  order, repeated fields and folded lines, with a Copy all button.
+- **Save all attachments** creates a new folder containing every attachment from
+  the displayed email. Duplicate filenames are kept as separate numbered files.
+  Individual attachment cards remain directly below the message details.
+- When conversation view is enabled, **Export selected conversations** exports all
+  related messages, including those outside the current search/folder. Single-email
+  export, PDF and print always use the message currently displayed in the reader.
+
+**View → Settings** stores sorting, conversation mode, page size, highlighting,
+preferred email format, reading zoom, layout restoration and recent-backup history.
+Window size and panel widths are restored when enabled. Remote images always need
+per-message consent; there is no automatic image-download setting.
+
+**File → Cache manager** lists saved indexes, source locations, sizes and indexing
+status. Select one or more to remove them. Removing the current index closes its
+mailbox; original backups, settings and diagnostic logs are kept. Cache management
+is available after an import/export has finished or been cancelled.
 
 ## Run from source
 
@@ -79,7 +114,7 @@ closes the guide and leaves the same choices on the empty screen. Reopen it with
 **Help → Getting started**. It also returns when the current cache is cleared or an
 import fails before any mail is loaded.
 
-Choose **Open archive** or **Open folder**. A background task scans the mailbox and builds a local SQLite search index. Select folders on the left, messages in the middle, and read the message on the right. Search terms match subject, sender, recipients and plain-text message content. Use **All mail** to search across folders. The search options button adds sender, subject, date and attachment filters. Attachments also appear as cards below the message date, showing a file-type icon, filename and size. Click a card to save that file. Use the **three-dot menu** at the top right of an email to save attachments, export the original `.eml`, or download images. The top toolbar has Search options followed by Open archive and Open folder, all with matching outline icons. The app opens one mailbox at a time; a multi-account backup asks which mailbox to open. **Clear cache** removes derived copies and search indexes from your computer.
+Choose **Open archive** or **Open folder**. A background task scans the mailbox and builds a local SQLite search index. Select folders on the left, messages in the middle, and read the message on the right. Search terms match subject, sender, recipients and plain-text message content. Use **All mail** to search across folders. The search options button adds sender, subject, date and attachment filters. Attachments also appear as cards below the message date, showing a file-type icon, filename and size. Click a card to save that file. Use the **three-dot menu** at the top right of an email to save attachments, export the original `.eml`, or download images. The top toolbar has Search options followed by Open archive and Open folder, all with matching outline icons. The app opens one mailbox at a time; a multi-account backup asks which mailbox to open. **File → Cache manager** removes selected derived copies and search indexes from your computer.
 
 HTML emails are displayed in the preview. Remote images are blocked by default;
 the message banner offers **Download images** for that message only. Each request has a
@@ -122,16 +157,21 @@ those dependencies and can be kept on its own.
 
 - The source archive and extracted mailbox are never changed. Search caches and logs are stored in `%LOCALAPPDATA%/DesignStack/DovecotMailboxViewer`. The portable EXE also unpacks its runtime into a temporary folder; exports are written only where you choose to save them.
 - Recognises the dbox `m.*` container used by the supplied backup, including gzip-compressed message records and the `B<mailbox>` metadata. It discovers folders even if empty.
-- `B` metadata labels the mailbox in this sample. Supported transaction logs supply read/deleted flags, but main index snapshots and map indexes are not yet supported, so it does not promise authoritative state or folder placement for every Dovecot version. Treat ambiguous records as review material, not an exact live-mailbox reconstruction.
+- Validated GUID-bearing, little-endian Dovecot 7.x main index snapshots and 1.0–1.3 transaction logs supply folder placement and read/deleted/expunged flags. Contiguous rotated logs are replayed after the snapshot's recorded position. Unsupported layouts, missing log history and ambiguous GUIDs remain unknown; `B` metadata supplies the fallback folder. Separate mdbox map indexes are not interpreted. This is not an exact live-mailbox reconstruction for every Dovecot version.
 - HTML messages render locally with external resources blocked by default. Loading external images is a per-message choice. Failed downloads keep the notice visible with a **Try again** link and diagnostic logging. Attachments are never run automatically.
 - Archives are processed one storage file at a time; a large archive requires free disk space for the private search database. Initial indexing may take time. Tar paths are never extracted to arbitrary destinations.
-- This is a first version verified with the supplied eight-message JetBackup sample; test against more backups before using it as a general-purpose forensic viewer.
+- Verified with the supplied eight-message JetBackup sample and synthetic format/regression tests. Wider real-world Dovecot backup coverage is still needed before treating this as a general-purpose forensic viewer.
 
 ## Code layout
 
 - `viewer/mdbox.py` scans tar/folder inputs and yields validated message bytes and mailbox metadata.
 - `viewer/catalog.py` builds and queries a private SQLite catalogue and full-text index.
-- `viewer/app.py` contains the Qt interface and background import worker.
+- `viewer/app.py` contains mailbox navigation and the Qt interface.
+- `viewer/importing.py` performs cancellable discovery, cache checks and incremental import off the GUI thread.
+- `viewer/reading.py` provides conversation navigation, finding/highlighting, zoom, headers and attachment actions.
+- `viewer/preferences.py` and `viewer/cache_manager.py` provide local settings and safe cache management.
+- `viewer/dovecot_index.py` validates supported main indexes and transaction logs.
+- `viewer/operations.py` supplies cooperative cancellation during archive reads.
 - `viewer/version.py` is the single source for the app and release version.
 - `viewer/exporting.py` streams complete or selected email exports on a worker thread.
 - `viewer/printing.py` prepares safe email printouts and PDF exports.
@@ -150,23 +190,29 @@ Do not commit client email archives or generated cache folders to GitHub.
 
 ### Progressive viewing and cache
 
-Messages appear as storage records are parsed and committed, while indexing continues.
-The percentage describes bytes read from the mailbox storage files; reading a compressed
-archive and discovering accounts may take time before this progress starts. A completed
-index opens immediately on the next launch if the source path, size and modification
-time match. **File → Clear current cache** removes the local catalogue and causes a
-rebuild next time the account is opened. For extracted folders, changes to any file
-invalidate the cache. Email content and search terms remain in a private local SQLite
-cache; delete it via the menu if the backup contains sensitive mail.
+Discovery, fingerprint checks and importing run in the background. The status bar
+shows the current phase immediately and offers **Cancel opening**. Discovery and
+status reading use an activity indicator; the percentage during message reading
+measures bytes consumed from the selected mailbox's storage files. Compressed
+archives are read in physical order to avoid repeated gzip seeks. Emails become
+readable and searchable as batches are committed; search covers the messages
+processed so far.
 
-The app reads supported Dovecot transaction logs and matches GUIDs with stored messages
-to display seen, deleted and expunged state. A filled circle marks known unread mail.
-When an index cannot establish a message's status, the app leaves it unmarked rather
-than claiming it is unread. Main index snapshots and older transaction log formats are
-not yet supported; those backups may show unknown flags. Expunged messages still present
-in storage are displayed with an Expunged label for recovery. Export the selected email
-with **File → Export email as .eml…** or the email’s three-dot menu; it writes the
-original message bytes.
+Cancelling keeps already committed messages available for browsing and individual
+export, but marks the index incomplete. Reopen the backup to rebuild the complete
+index. Whole-folder export stays disabled for incomplete indexes.
+
+Completed indexes are reused if the source identity is unchanged. Recently opened,
+unchanged archives can also skip mailbox discovery; folder backups check file paths,
+sizes and modification times in the background. Version 0.3.0 rebuilds older caches
+once to add normalised dates and conversation links. Subsequent openings reuse the
+new index. These checks use file metadata, not a cryptographic hash of the backup.
+
+The local SQLite cache contains email content and search data. **File → Cache
+manager** removes saved indexes and causes a rebuild next time the backup is opened.
+A filled circle marks mail known to be unread; unknown status is left unmarked.
+Deleted and expunged messages still present in storage remain available for recovery.
+The original `.eml` bytes are preserved during export.
 
 
 ## About the author

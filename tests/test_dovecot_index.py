@@ -14,6 +14,7 @@ class IndexTests(unittest.TestCase):
     def test_flags_and_expunge(self):
         header = bytearray(40)
         header[0:4] = b'\x01\x03\x28\x00'
+        header[32] = 1
         guid = bytes(range(16))
         ext = struct.pack('<IIIHHHH', 0xffffffff, 0, 0, 16, 1, 1, 4) + b'guid'
         data = bytes(header) + transaction(0x40, ext)

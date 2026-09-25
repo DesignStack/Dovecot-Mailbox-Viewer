@@ -5,31 +5,33 @@ from email.utils import parsedate_to_datetime, parseaddr
 import sys
 import logging
 from logging.handlers import RotatingFileHandler
-import time
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot, Qt, QUrl, QSize
+from PySide6.QtCore import QTimer, Slot, Qt, QUrl, QSize
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar, QSplitter, QInputDialog,
-    QScrollArea, QStackedWidget, QToolButton, QVBoxLayout, QWidget, QProgressDialog,
+    QScrollArea, QStackedWidget, QToolButton, QComboBox, QPushButton, QVBoxLayout, QWidget, QProgressDialog,
 )
 from PySide6.QtPrintSupport import QPrintDialog
 
-from viewer.catalog import Catalogue, cache_path, describe, source_fingerprint
+from viewer.catalog import Catalogue, cache_path, describe
 from viewer.html_preview import SafeHtmlPreview, MAX_IMAGES
 from viewer.icons import line_icon
 from viewer.mail_widgets import FolderDelegate, MessageDelegate, DETAILS_ROLE
 from viewer.attachments import AttachmentList, collect_attachments, suggested_filename
 from viewer.welcome import WelcomeDialog, WelcomePage
-from viewer.mdbox import discover, read_account
-from viewer.dovecot_index import read_statuses, SEEN, DELETED
+from viewer.dovecot_index import SEEN, DELETED
 from viewer.version import __version__
 from viewer.recent import RecentBackups, dropped_backup
 from viewer.exporting import ExportWorker, safe_name
 from viewer.printing import MailPrintDocument, make_printer, save_pdf, print_document
 from viewer.updates import UpdateDialog
+from viewer.importing import OpenWorker
+from viewer.reading import ReadingMixin
+from viewer.preferences import read_preferences, write_preferences
+from viewer.catalog import SORTS
 
 
 def log_path() -> Path:
@@ -102,54 +104,7 @@ class SearchDialog(QDialog):
         super().accept()
 
 
-class ImportWorker(QObject):
-    progress = Signal(int, int)  # percentage, message count
-    batch = Signal(int)
-    completed = Signal(int)
-    failed = Signal(str)
-
-    def __init__(self, source: Path, account: str, info: dict, database: Path, fingerprint: str):
-        super().__init__()
-        self.source, self.account, self.info, self.database, self.fingerprint = source, account, info, database, fingerprint
-
-    def run(self):
-        catalogue = None
-        try:
-            logging.getLogger("viewer").info("Import started: %s (%s)", self.source, self.account)
-            catalogue = Catalogue(self.database)
-            catalogue.reset()
-            for folder in sorted(self.info["folders"]):
-                catalogue.add_folder(folder)
-            statuses = read_statuses(self.source, self.info)
-            count = 0
-            last_commit = time.monotonic()
-            last_percent, last_update = -1, 0.0
-            for record in read_account(self.source, self.info):
-                match = statuses.get(record.guid) if record.guid else None
-                catalogue.add(record, match[1] if match else None)
-                count += 1
-                percent = min(99, int(100 * record.bytes_done / max(1, record.bytes_total)))
-                now = time.monotonic()
-                if percent != last_percent or now - last_update >= 0.5:
-                    self.progress.emit(percent, count)
-                    last_percent, last_update = percent, now
-                if count == 1 or count % 25 == 0 or now - last_commit >= 0.5:
-                    catalogue.commit()
-                    self.batch.emit(count)
-                    last_commit = now
-            catalogue.finish(self.fingerprint)
-            self.batch.emit(count)
-            logging.getLogger("viewer").info("Import complete: %s messages (%s)", count, self.account)
-            self.completed.emit(count)
-        except Exception as exc:
-            logging.getLogger("viewer").exception("Import failed for %s", self.account)
-            self.failed.emit(str(exc))
-        finally:
-            if catalogue is not None:
-                catalogue.close()
-
-
-class Window(QMainWindow):
+class Window(ReadingMixin, QMainWindow):
     def __init__(self, *, show_welcome=True, settings=None):
         super().__init__()
         self.setWindowTitle("Dovecot Mailbox Viewer")
@@ -169,6 +124,12 @@ class Window(QMainWindow):
         self._startup_welcome_scheduled = False
         self._import_error_visible = False
         self.recent_backups = RecentBackups(settings)
+        self.settings = self.recent_backups.settings
+        self.preferences = read_preferences(self.settings)
+        self.page_offset = 0
+        self._filter_identity = None
+        self._closing = False
+        self.import_incomplete = False
         self.export_worker = None
         self.export_progress = None
         self.update_dialog = None
@@ -247,7 +208,8 @@ class Window(QMainWindow):
         open_folder = QAction(line_icon("folder"), "Open folder…", self)
         open_folder.triggered.connect(self.open_folder)
         clear_cache = QAction(line_icon("refresh"), "Clear current cache", self)
-        clear_cache.triggered.connect(self.clear_cache)
+        clear_cache.setText("Cache manager…")
+        clear_cache.triggered.connect(self.show_cache_manager)
         open_log = QAction(line_icon("log"), "Open diagnostic log", self)
         open_log.triggered.connect(self.open_log)
         file_menu = self.menuBar().addMenu("File")
@@ -264,6 +226,15 @@ class Window(QMainWindow):
         self.exit_action.setShortcut("Ctrl+Q")
         self.exit_action.triggered.connect(self.close)
         file_menu.addAction(self.exit_action)
+        view_menu = self.menuBar().addMenu("View")
+        self.conversations_action = QAction("Conversation view", self)
+        self.conversations_action.setCheckable(True)
+        self.conversations_action.setChecked(self.preferences['conversations'])
+        self.conversations_action.triggered.connect(self.toggle_conversations)
+        view_menu.addAction(self.conversations_action)
+        view_menu.addAction("Find in this email…", self.show_find)
+        view_menu.addSeparator()
+        view_menu.addAction("Settings…", self.show_settings)
         help_menu = self.menuBar().addMenu("Help")
         self.getting_started_action = QAction(line_icon("mail"), "Getting started…", self)
         self.getting_started_action.triggered.connect(self.show_welcome)
@@ -326,6 +297,7 @@ class Window(QMainWindow):
         side_layout.addWidget(self.mailbox_name)
         self.folders = QListWidget()
         self.folders.setObjectName("folders")
+        self.folders.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.folders.setAccessibleName("Mailbox folders")
         self.folders.setItemDelegate(FolderDelegate(self.folders))
         self.folders.currentRowChanged.connect(self.refresh_messages)
@@ -352,8 +324,16 @@ class Window(QMainWindow):
         header_layout.addWidget(self.folder_title, 1)
         header_layout.addWidget(self.message_count)
         middle_layout.addWidget(middle_header)
+        self.sort_picker = QComboBox()
+        self.sort_picker.setAccessibleName("Sort emails")
+        for key, (label, _) in SORTS.items():
+            self.sort_picker.addItem(label, key)
+        self.sort_picker.setCurrentIndex(self.sort_picker.findData(self.preferences['sort']))
+        self.sort_picker.currentIndexChanged.connect(self.sort_changed)
+        middle_layout.addWidget(self.sort_picker)
         self.listing = QListWidget()
         self.listing.setObjectName("messages")
+        self.listing.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.listing.setAccessibleName("Emails")
         self.listing.setItemDelegate(MessageDelegate(self.listing))
         self.listing.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
@@ -362,6 +342,16 @@ class Window(QMainWindow):
         self.listing.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.listing.currentItemChanged.connect(self.show_message)
         middle_layout.addWidget(self.listing, 1)
+        page_row = QHBoxLayout()
+        page_row.setContentsMargins(12, 6, 12, 6)
+        self.previous_page = self._tool("Previous page", "left", lambda: self.change_page(-1))
+        self.next_page = self._tool("Next page", "right", lambda: self.change_page(1))
+        self.page_label = QLabel()
+        self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        page_row.addWidget(self.previous_page)
+        page_row.addWidget(self.page_label, 1)
+        page_row.addWidget(self.next_page)
+        middle_layout.addLayout(page_row)
         self.panes.addWidget(middle)
 
         right = QWidget()
@@ -418,6 +408,7 @@ class Window(QMainWindow):
         self.attachment_cards = AttachmentList()
         self.attachment_cards.save_requested.connect(self.save_attachment_at)
         card_layout.addWidget(self.attachment_cards)
+        self.setup_reading(card_layout)
 
         self.image_notice = QFrame()
         self.image_notice.setObjectName("imageNotice")
@@ -437,6 +428,7 @@ class Window(QMainWindow):
         card_layout.addWidget(self.image_notice)
         self.preview = SafeHtmlPreview()
         self.preview.images_changed.connect(self.update_image_notice)
+        self.preview.images_changed.connect(self.highlight_matches)
         card_layout.addWidget(self.preview, 1)
         right_layout.addWidget(card)
         self.panes.addWidget(right)
@@ -465,11 +457,23 @@ class Window(QMainWindow):
         self.progress_bar.setTextVisible(False)
         self.progress_bar.setFixedSize(140, 6)
         self.progress_bar.hide()
+        self.cancel_open = QPushButton("Cancel opening")
+        self.cancel_open.clicked.connect(self.cancel_import)
+        self.cancel_open.hide()
+        self.statusBar().addPermanentWidget(self.cancel_open)
         self.statusBar().addPermanentWidget(self.activity)
         self.statusBar().addPermanentWidget(self.progress_bar)
         self.statusBar().showMessage("Local, read-only backup viewer")
         self.preview.setAcceptDrops(False)
         self.refresh_recent()
+        if self.preferences['remember_layout']:
+            geometry = self.settings.value('layout/geometry')
+            panes = self.settings.value('layout/panes')
+            if geometry is not None:
+                self.restoreGeometry(geometry)
+            if panes is not None:
+                self.panes.restoreState(panes)
+        self.apply_zoom()
 
     def refresh_recent(self):
         entries = self.recent_backups.entries()
@@ -653,6 +657,11 @@ class Window(QMainWindow):
     def reset_preview(self, title="Select an email to read"):
         from email.message import EmailMessage
         self.shown_message = None
+        self._body = None
+        self._font_runs = []
+        self.conversation_row.hide()
+        self.headers_action.setEnabled(False)
+        self.save_all_action.setEnabled(False)
         self.attachments = []
         self.attachment_cards.set_attachments([])
         self.heading.setText(title)
@@ -677,111 +686,100 @@ class Window(QMainWindow):
         return False
 
     def open_source(self, source: Path):
-        if self.export_worker is not None:
-            QMessageBox.information(self, "Export in progress", "Finish or cancel the current export before opening another backup.")
+        if self.export_worker is not None or self.worker_thread is not None:
+            QMessageBox.information(self, "Operation in progress", "Finish or cancel the current operation before opening another backup.")
             return False
-        if self.worker_thread and self.worker_thread.isRunning():
-            QMessageBox.information(self, "Indexing", "Please wait for indexing to finish.")
-            return False
-        try:
-            accounts = discover(source)
-            if not accounts:
-                raise ValueError("No supported mailbox was found here. Choose a JetBackup/cPanel "
-                                 "mailbox archive (.tar.gz or .tgz), or its extracted backup folder. "
-                                 "If you selected a folder inside the backup, try the parent folder.")
-        except Exception as exc:
-            QMessageBox.critical(self._opening_parent(), "Cannot open backup", str(exc))
-            return False
-        account = sorted(accounts)[0]
-        if len(accounts) > 1:
-            # There is one active mailbox. Select it once on opening a multi-
-            # account backup instead of leaving a dropdown in the main window.
-            account, ok = QInputDialog.getItem(self._opening_parent(), "Choose mailbox", "Open mailbox", sorted(accounts), 0, False)
-            if not ok:
-                return False
-        self.source, self.accounts, self.account_name = source, accounts, account
-        self.mailbox_name.setText(account)
-        self.mailbox_name.setTextFormat(Qt.TextFormat.PlainText)
-        self.source_label.setText(source.name)
+        self.close_mailbox()
+        self.source = Path(source)
+        self.import_incomplete = True
+        self.source_label.setText(self.source.name)
         self.source_label.setTextFormat(Qt.TextFormat.PlainText)
         self.source_label.setToolTip(str(source))
         self.search.blockSignals(True)
         self.search.clear()
         self.search.blockSignals(False)
         self.search_options = {}
-        logging.getLogger("viewer").info("Opened source: %s; account: %s", source, account)
-        opened = self.load_account()
-        if opened and self.welcome_dialog is not None:
-            self.welcome_dialog.accept()
-        return opened
-
-    def load_account(self, _=None):
-        if not self.source or not self.account_name:
-            return False
-        if self.worker_thread and self.worker_thread.isRunning():
-            return False
-        if self.catalogue:
-            self.catalogue.close()
-            self.catalogue = None
-        account = self.account_name
-        database = cache_path(self.source, account)
-        self.folders.clear()
-        self.listing.clear()
-        self.reset_preview()
-        try:
-            fingerprint = source_fingerprint(self.source, self.accounts[account])
-        except OSError as exc:
-            QMessageBox.critical(self._opening_parent(), "Cannot open backup", str(exc))
-            self._show_empty_page()
-            return False
-        try:
-            cached = Catalogue(database)
-            if cached.reusable(fingerprint):
-                self.catalogue = cached
-                self.import_done(cached.count())
-                self.activity.setText(f"Ready · {cached.count()} messages (cached)")
-                self.progress_bar.hide()
-                return True
-            cached.close()
-        except Exception:
-            logging.getLogger("viewer").exception("Cache check failed; rebuilding")
-        self.heading.setText("Indexing…")
-        self.activity.setText(f"Preparing {account}…")
-        self.progress_bar.setValue(0)
-        self.progress_bar.show()
-        self.statusBar().showMessage(f"Reading {account} · original backup remains untouched")
-        self.worker_thread = QThread(self)
-        self.pending_database = database
-        logging.getLogger("viewer").info("Starting worker for %s", account)
-        self.worker = ImportWorker(self.source, account, self.accounts[account], database, fingerprint)
-        self.worker.moveToThread(self.worker_thread)
-        self.worker_thread.started.connect(self.worker.run)
-        self.worker.progress.connect(self.update_progress)
-        self.worker.batch.connect(self.import_batch)
-        self.worker.completed.connect(self.import_done)
-        self.worker.failed.connect(self.import_failed)
-        self.worker.completed.connect(self.worker_thread.quit)
-        self.worker.failed.connect(self.worker_thread.quit)
-        self.worker_thread.finished.connect(self.worker.deleteLater)
-        self.worker_thread.finished.connect(self.thread_finished)
+        self.page_offset = 0
+        self._filter_identity = None
+        preferred = next((entry['account'] for entry in self.recent_backups.entries()
+                          if entry['path'] == str(self.source.resolve())), '')
+        worker = OpenWorker(self.source, preferred, self)
+        worker.cache_factory = cache_path
+        self.worker = self.worker_thread = worker
+        worker.phase.connect(self.open_phase)
+        worker.choose_account.connect(self.choose_account)
+        worker.prepared.connect(self.account_prepared)
+        worker.progress.connect(self.update_progress)
+        worker.batch.connect(self.import_batch)
+        worker.completed.connect(self.import_done)
+        worker.cancelled.connect(self.import_cancelled)
+        worker.failed.connect(self.import_failed)
+        worker.finished.connect(self.thread_finished)
+        self.heading.setText("Opening your backup…")
         self.content_stack.setCurrentWidget(self.panes)
-        self.worker_thread.start()
+        self.open_phase("Preparing to open your backup…")
+        self.cancel_open.setEnabled(True)
+        self.cancel_open.show()
+        if self.welcome_dialog is not None:
+            self.welcome_dialog.accept()
+        worker.start()
         return True
+
+    @Slot(object)
+    def choose_account(self, accounts):
+        account, ok = QInputDialog.getItem(self, "Choose mailbox", "Open mailbox", accounts, 0, False)
+        if self.worker is not None:
+            if ok:
+                self.worker.select_account(account)
+            else:
+                self.worker.cancel()
+
+    @Slot(str, str)
+    def account_prepared(self, account, database):
+        self.account_name = account
+        self.pending_database = Path(database)
+        self.mailbox_name.setTextFormat(Qt.TextFormat.PlainText)
+        self.mailbox_name.setText(account)
+
+    @Slot(str)
+    def open_phase(self, text):
+        self.activity.setText(text)
+        self.statusBar().showMessage(text)
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.show()
+
+    def cancel_import(self):
+        if self.worker is not None:
+            self.worker.cancel()
+            self.cancel_open.setEnabled(False)
+            self.activity.setText("Stopping…")
+
+    @Slot(int)
+    def import_cancelled(self, count):
+        self.activity.setText(f"Stopped · {count} messages available · reopen to rebuild the full index")
+        self.statusBar().showMessage(self.activity.text())
 
     @Slot()
     def thread_finished(self):
-        self.worker = None
-        self.worker_thread.deleteLater()
-        self.worker_thread = None
+        worker = self.worker_thread
+        self.worker = self.worker_thread = None
+        worker.deleteLater()
+        self.progress_bar.hide()
+        self.cancel_open.hide()
         self.update_export_actions()
-        if self.catalogue is None:
+        if self._closing:
+            self.close()
+        elif self.catalogue is None:
             self._show_empty_page()
+            if self._welcome_enabled:
+                QTimer.singleShot(0, self._welcome_if_empty)
 
     @Slot(int, int)
     def update_progress(self, percent, count):
+        self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(percent)
-        self.activity.setText(f"Indexing {percent}% · {count} messages")
-        self.statusBar().showMessage(f"Indexing {percent}% · {count} messages")
+        self.activity.setText(f"Reading emails {percent}% · {count} messages")
+        self.statusBar().showMessage(self.activity.text())
 
     @Slot(int)
     def import_batch(self, count):
@@ -789,15 +787,17 @@ class Window(QMainWindow):
             self.catalogue = Catalogue(self.pending_database)
         self.populate_folders(count)
 
-    @Slot(int)
-    def import_done(self, count):
+    @Slot(int, bool)
+    def import_done(self, count, cached=False):
+        self.import_incomplete = False
+        self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
-        self.activity.setText(f"Ready · {count} messages indexed")
         self.progress_bar.hide()
+        self.activity.setText(f"Ready · {count} messages" + (" (cached)" if cached else " indexed"))
         if self.catalogue is None:
             self.catalogue = Catalogue(self.pending_database)
         self.populate_folders(count)
-        if self.source is not None:
+        if self.source is not None and self.preferences['remember_recent']:
             self.recent_backups.remember(self.source, self.account_name)
             self.refresh_recent()
 
@@ -855,7 +855,16 @@ class Window(QMainWindow):
         selected = self.folders.currentItem()
         folder = selected.data(Qt.ItemDataRole.UserRole) if selected else None
         try:
-            rows = self.catalogue.messages(folder, self.search.text(), **self.search_options)
+            filters = dict(folder=folder, query=self.search.text(), **self.search_options)
+            identity = (tuple(sorted(filters.items())), self.sort_picker.currentData(), self.preferences['conversations'])
+            if identity != self._filter_identity:
+                self.page_offset = 0
+                self._filter_identity = identity
+            total = self.catalogue.matching_count(conversations=self.preferences['conversations'], **filters)
+            page_size = self.preferences['page_size']
+            self.page_offset = min(self.page_offset, max(0, ((total-1)//page_size)*page_size))
+            rows = self.catalogue.messages(**filters, sort=self.sort_picker.currentData(),
+                limit=page_size, offset=self.page_offset, conversations=self.preferences['conversations'])
         except Exception as exc:
             self.statusBar().showMessage(f"Search error: {exc}")
             return
@@ -877,8 +886,9 @@ class Window(QMainWindow):
                 "Deleted · " if row["status"] is not None and row["status"] & DELETED else "")
             item = QListWidgetItem(f"{sender} — {subject}")
             item.setData(Qt.ItemDataRole.UserRole, row["id"])
-            item.setData(DETAILS_ROLE, dict(sender=sender, date=shown_date, subject=status_label + subject,
-                snippet=snippet, attachment=bool(row["has_attachment"]),
+            item.setData(DETAILS_ROLE, dict(sender=sender, date=shown_date, subject=status_label + (f"({row['thread_count']}) " if row['thread_count'] > 1 else "") + subject,
+                snippet=snippet, attachment=bool(row["has_attachment"]), thread=row['thread_key'],
+                thread_count=row['thread_count'], highlight=self.search.text() if self.preferences['highlight'] else '', 
                 unread=row["status"] is not None and not row["status"] & SEEN))
             item.setToolTip(f"{row['date']} · {row['folder']}")
             self.listing.addItem(item)
@@ -899,10 +909,15 @@ class Window(QMainWindow):
         self.listing.blockSignals(False)
         label = (selected.data(DETAILS_ROLE) or {}).get("label", "All mail") if selected else "All mail"
         self.folder_title.setText("Search results" if self.search.text() or any(self.search_options.values()) else label)
-        self.message_count.setText(str(len(rows)))
+        self.message_count.setText(str(total))
+        self.page_label.setText(f"{self.page_offset+1 if rows else 0}–{self.page_offset+len(rows)} of {total:,}")
+        self.previous_page.setEnabled(self.page_offset > 0)
+        self.next_page.setEnabled(self.page_offset + len(rows) < total)
         self.show_message()
         self.update_export_actions()
-        self.statusBar().showMessage(f"Showing {len(rows)} messages" + (" (first 5,000)" if len(rows) == 5000 else ""))
+        self.highlight_matches()
+        self.statusBar().showMessage(f"Showing {self.page_label.text()} " +
+            ("conversations (matching messages)" if self.preferences['conversations'] else "emails"))
 
     def show_message(self, _=None):
         item = self.listing.currentItem()
@@ -910,6 +925,13 @@ class Window(QMainWindow):
             self.reset_preview("No emails to display" if self.catalogue else "Open a mailbox to start reading")
             return
         ident = item.data(Qt.ItemDataRole.UserRole)
+        if self.preferences['conversations'] and self.shown_message is not None:
+            if any(row['id'] == self.shown_message for row in self.catalogue.conversation(ident)):
+                self.populate_conversation(self.shown_message)
+                return
+        self.display_message(ident)
+
+    def display_message(self, ident):
         # New batches must not discard the reader's scroll or image consent.
         if ident == self.shown_message:
             return
@@ -926,37 +948,39 @@ class Window(QMainWindow):
         self.avatar.setText("".join(word[0] for word in (name or address or "?").split()[:2]).upper())
         self.avatar.show()
         self.details.setText("\n".join(f"{key}: {msg.get(key, '')}" for key in ("To", "Cc", "Date") if msg.get(key)))
-        if html:
-            self.preview.display(html, msg)
-        else:
-            from html import escape
-            self.preview.display(f"<pre style='white-space:pre-wrap'>{escape(plain or '(No readable text body)')}</pre>", msg)
+        self._body = (msg, plain, html)
+        self.populate_conversation(ident)
+        self.render_body()
         self.attachments = collect_attachments(msg)
         self.attachment_cards.set_attachments(self.attachments)
         self.attachment_action.setText(f"Save attachment… ({len(self.attachments)})" if self.attachments else "Save attachment…")
         self.attachment_action.setEnabled(bool(self.attachments))
+        self.save_all_action.setEnabled(bool(self.attachments))
+        self.headers_action.setEnabled(True)
         self.export_action.setEnabled(True)
         self.pdf_action.setEnabled(True)
         self.print_action.setEnabled(True)
 
     def update_export_actions(self):
         count = len(self.listing.selectedItems()) if self.catalogue else 0
-        self.bulk_export_action.setText(f"Export selected emails… ({count})" if count else "Export selected emails…")
+        self.bulk_export_action.setText(f"Export selected {'conversations' if self.preferences['conversations'] else 'emails'}… ({count})" if count else "Export selected emails…")
         self.bulk_export_action.setEnabled(count > 0 and self.export_worker is None)
         folder = self.folders.currentItem()
         folder_count = (folder.data(DETAILS_ROLE) or {}).get('count', 0) if folder else 0
         all_mail = folder is not None and folder.data(Qt.ItemDataRole.UserRole) is None
         self.folder_export_action.setText("Export all mail…" if all_mail else "Export entire folder…")
         self.folder_export_action.setEnabled(bool(self.catalogue and folder_count and self.worker_thread is None
-                                                  and self.export_worker is None))
+                                                  and self.export_worker is None and not self.import_incomplete))
 
     def export_selected(self):
         ids = [item.data(Qt.ItemDataRole.UserRole) for item in self.listing.selectedItems()]
+        if self.preferences['conversations'] and self.catalogue:
+            ids = list({row['id'] for ident in ids for row in self.catalogue.conversation(ident)})
         if ids:
             self.start_export(ids=ids)
 
     def export_folder(self):
-        if self.worker_thread is not None:
+        if self.import_incomplete or self.worker_thread is not None:
             QMessageBox.information(self, "Indexing", "Wait for indexing to finish to export the complete folder.")
             return
         selected = self.folders.currentItem()
@@ -1024,10 +1048,9 @@ class Window(QMainWindow):
             QMessageBox.warning(self, "Export stopped", self._export_result or "The export did not finish.")
 
     def print_document(self):
-        item = self.listing.currentItem()
-        if item is None or self.catalogue is None:
+        if self.shown_message is None or self.catalogue is None:
             return None
-        row = self.catalogue.message(item.data(Qt.ItemDataRole.UserRole))
+        row = self.catalogue.message(self.shown_message)
         message, _, _, _ = describe(row['raw'])
         return MailPrintDocument(self.preview, message, [part.filename for part in self.attachments])
 
@@ -1040,6 +1063,8 @@ class Window(QMainWindow):
             return
         if not path.lower().endswith('.pdf'):
             path += '.pdf'
+        if not self.allowed_destination(path):
+            return
         try:
             save_pdf(document, path, self.heading.text())
             self.statusBar().showMessage(f"Saved {path}", 10000)
@@ -1060,16 +1085,15 @@ class Window(QMainWindow):
                 self.statusBar().showMessage("Email sent to the printer", 5000)
 
     def export_eml(self):
-        item = self.listing.currentItem()
-        if not item or not self.catalogue:
+        if self.shown_message is None or not self.catalogue:
             return
-        row = self.catalogue.message(item.data(Qt.ItemDataRole.UserRole))
+        row = self.catalogue.message(self.shown_message)
         if row is None:
             return
         import re
         filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', row['subject'] or 'message')[:100].strip(' .') or 'message'
         destination, _ = QFileDialog.getSaveFileName(self, 'Export email', filename + '.eml', 'Email files (*.eml)')
-        if destination:
+        if destination and self.allowed_destination(destination):
             try:
                 Path(destination).write_bytes(row['raw'])
                 self.statusBar().showMessage(f"Exported {destination}")
@@ -1095,37 +1119,59 @@ class Window(QMainWindow):
         attachment = self.attachments[index]
         default = suggested_filename(attachment.filename)
         destination, _ = QFileDialog.getSaveFileName(self, "Save attachment", default)
-        if destination:
+        if destination and self.allowed_destination(destination):
             try:
                 Path(destination).write_bytes(attachment.data)
                 self.statusBar().showMessage(f"Saved {attachment.filename}", 5000)
             except OSError as exc:
                 QMessageBox.critical(self, "Cannot save attachment", str(exc))
 
-    def clear_cache(self):
-        if self.export_worker is not None:
-            QMessageBox.information(self, "Export in progress", "Finish or cancel the export before clearing its search cache.")
-            return
-        if not self.source or not self.account_name:
-            return
-        if self.worker_thread and self.worker_thread.isRunning():
-            QMessageBox.information(self, "Indexing", "Wait for indexing to finish first.")
-            return
+    def change_page(self, direction):
+        self.page_offset = max(0, self.page_offset + direction * self.preferences['page_size'])
+        self.refresh_messages()
+        self.listing.verticalScrollBar().setValue(0)
+
+    def sort_changed(self):
+        self.preferences['sort'] = self.sort_picker.currentData()
+        write_preferences(self.settings, self.preferences)
+        self.page_offset = 0
+        self.refresh_messages()
+
+    def toggle_conversations(self, enabled):
+        self.preferences['conversations'] = enabled
+        write_preferences(self.settings, self.preferences)
+        self.page_offset = 0
+        self.refresh_messages()
+        if self.shown_message is not None:
+            self.populate_conversation(self.shown_message)
+
+    def close_mailbox(self):
         if self.catalogue:
             self.catalogue.close()
             self.catalogue = None
-        database = cache_path(self.source, self.account_name)
-        for suffix in ("", "-wal", "-shm"):
-            Path(str(database) + suffix).unlink(missing_ok=True)
+        self.folders.blockSignals(True)
         self.folders.clear()
+        self.folders.blockSignals(False)
         self.listing.clear()
-        self.reset_preview("Search cache cleared")
+        self.reset_preview()
         self.folder_title.setText("All mail")
         self.message_count.clear()
+        self.page_label.clear()
         self.source = None
         self.account_name = ""
         self.mailbox_name.setText("Mailboxes")
+        self.source_label.setText("Open a mailbox backup to get started")
         self.activity.setText("Ready")
+
+    def clear_cache(self):
+        if self.worker_thread is not None or self.export_worker is not None:
+            QMessageBox.information(self, "Operation in progress", "Finish or cancel the current operation first.")
+            return
+        database = self.catalogue.path if self.catalogue else None
+        self.close_mailbox()
+        if database:
+            for suffix in ("", "-wal", "-shm"):
+                Path(str(database) + suffix).unlink(missing_ok=True)
         self._show_empty_page()
         self.statusBar().showMessage("Cache removed; original backup unchanged")
 
@@ -1134,12 +1180,18 @@ class Window(QMainWindow):
             QMessageBox.information(self, "Export in progress", "Finish or cancel the export before closing.")
             event.ignore()
             return
-        if self.worker_thread and self.worker_thread.isRunning():
-            QMessageBox.information(self, "Indexing", "Please let indexing finish before closing.")
+        if self.worker_thread is not None:
+            self._closing = True
+            self.cancel_import()
             event.ignore()
             return
+        if self.preferences['remember_layout']:
+            self.settings.setValue('layout/geometry', self.saveGeometry())
+            self.settings.setValue('layout/panes', self.panes.saveState())
+            self.settings.sync()
         if self.catalogue:
             self.catalogue.close()
+            self.catalogue = None
         if self.welcome_dialog is not None:
             self.welcome_dialog.reject()
         if self.update_dialog is not None:
