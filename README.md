@@ -1,5 +1,7 @@
 # Dovecot Mailbox Viewer
 
+[MIT licence](LICENSE) · [Windows download](https://github.com/DesignStack/Dovecot-Mailbox-Viewer/releases/latest/download/Dovecot-Mailbox-Viewer-Windows.exe) · [DesignStack](https://designstack.co.uk)
+
 A local, read-only Windows desktop viewer for JetBackup/cPanel **mdbox** mail backups. Open a `.tar.gz` archive or the extracted `backup/email` directory. Mailbox content stays on your computer; the application makes a separate local cache for searching and previews.
 
 ## Download for Windows
@@ -241,6 +243,19 @@ A filled circle marks mail known to be unread; unknown status is left unmarked.
 Deleted and expunged messages still present in storage remain available for recovery.
 The original `.eml` bytes are preserved during export.
 
+
+## Licence
+
+DesignStack's original application code, documentation and outline icons are
+released under the [MIT licence](LICENSE), copyright © 2026 DesignStack Ltd.
+You can use, modify and redistribute them, including commercially, provided you
+retain the copyright and licence notice. The software is supplied without warranty.
+
+Python, Qt/PySide and other dependencies keep their own licences; the MIT licence
+does not relicense them. See [Third-party software](THIRD_PARTY_NOTICES.md) for
+upstream terms and redistribution guidance.
+
+This is an independent project, not an official Dovecot, JetBackup or cPanel product.
 
 ## About the author
 

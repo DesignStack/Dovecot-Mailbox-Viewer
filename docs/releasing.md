@@ -19,6 +19,12 @@ published, it leaves the release untouched. Build artifacts remain available
 for development commits. To publish changed code, increment the version.
 Never move a published version tag to a different commit or replace its EXE.
 
+Before publishing binaries, review [third-party software](../THIRD_PARTY_NOTICES.md).
+Include the application licence and the exact dependency licence texts/notices,
+record bundled versions, and fulfil the corresponding-source and rebuild/replacement
+requirements of the LGPL components. Adding a licence to this repository does not
+retroactively add those materials to an already published executable.
+
 Uploads happen in a draft release. If uploading fails, rerun the failed workflow
 for the same commit to resume that draft. A draft from a different commit must
 be reviewed before publishing; the script deliberately stops in that case.
