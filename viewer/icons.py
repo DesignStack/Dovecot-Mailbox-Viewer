@@ -11,6 +11,11 @@ from PySide6.QtSvg import QSvgRenderer
 
 
 PATHS = {
+    "sort": '<path d="M4 6h16M7 12h10M10 18h4"/>',
+    "list_preview": '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8M8 15h5"/>',
+    "list_compact": '<path d="M4 5h16M4 10h16M4 15h16M4 20h16"/>',
+    "zoom": '<circle cx="10" cy="10" r="6.5"/><path d="m15 15 6 6M7 10h6M10 7v6"/>',
+    "code": '<path d="m7 6-5 6 5 6m10-12 5 6-5 6M14 3l-4 18"/>',
     "left": '<path d="m15 6-6 6 6 6"/>',
     "right": '<path d="m9 6 6 6-6 6"/>',
     "minus": '<path d="M5 12h14"/>',

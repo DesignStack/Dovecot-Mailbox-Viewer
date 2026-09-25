@@ -59,9 +59,23 @@ Finish or cancel a running export first.
 
 ## Browse, sort and read
 
-- Use the sort selector above the message list for **Newest first**, **Oldest first**,
-  **Sender A–Z/Z–A** or **Subject A–Z/Z–A**. Date sorting uses the email's actual
-  timestamp, including its time zone; missing dates appear last.
+- The underlined **Unread / All** tabs filter the current folder and search.
+  All is selected when opening a backup. Unread includes only messages marked unread
+  by the backup's supported Dovecot indexes; unknown status is not treated as unread.
+  Opening an email never changes its stored read status.
+- Click the **sort icon** at the top right of the message list for **Newest first**,
+  **Oldest first**, **Sender A–Z/Z–A** or **Subject A–Z/Z–A**. The menu shows the active
+  order. Date sorting uses the actual timestamp, including its time zone.
+- The adjacent **list layout icon** offers **Preview** (sender, subject and body
+  snippet) or **Compact** (sender, subject and date, without the body snippet).
+  Both layouts retain attachment indicators, unread styling and multi-selection.
+- When sorted by date, emails appear under populated headings such as **Today**,
+  **Yesterday**, **This Week**, **Last Week**, **Two Weeks Ago**, **Three Weeks Ago**,
+  **Earlier This Month**, **Last Month** and **Older**. Dates use your computer's
+  local time and first weekday. Day/week groups take precedence over month groups,
+  so a message appears only once. Future and unknown dates have separate headings;
+  unknown dates sort last. Sender/subject sorting stays alphabetical without date
+  sections. Relative headings refresh after midnight while the app is open.
 - Page controls below the list let you browse every email. There is no 5,000-message
   cutoff. **View → Settings** offers 100, 200 or 500 messages per page.
 - Enable **View → Conversation view** to group replies. A selector above the email
@@ -72,7 +86,11 @@ Finish or cancel a running export first.
 - Search matches are highlighted in the message list and email body. **Ctrl+F** opens
   mailbox search options; **Ctrl+G** opens Find within the displayed email.
   Use **F3 / Shift+F3** for the next/previous match.
-- Reading controls offer **HTML view / Plain text** and **60–200% text zoom**.
+- At the top right of the email, the **magnifying-glass zoom icon** offers presets
+  and a custom **60–200% text zoom**, with 100% as the default.
+- The **code icon** beside it toggles **HTML / Plain text**. HTML is enabled by
+  default; a highlighted icon means HTML is on. Your choice is remembered.
+  Switching format never grants permission to download remote images.
 - The email's **three-dot menu → View original headers** shows the original header
   order, repeated fields and folded lines, with a Copy all button.
 - **Save all attachments** creates a new folder containing every attachment from
@@ -82,7 +100,7 @@ Finish or cancel a running export first.
   related messages, including those outside the current search/folder. Single-email
   export, PDF and print always use the message currently displayed in the reader.
 
-**View → Settings** stores sorting, conversation mode, page size, highlighting,
+**View → Settings** stores sorting, Compact/Preview layout, conversation mode, page size, highlighting,
 preferred email format, reading zoom, layout restoration and recent-backup history.
 Window size and panel widths are restored when enabled. Remote images always need
 per-message consent; there is no automatic image-download setting.
@@ -170,6 +188,7 @@ those dependencies and can be kept on its own.
 - `viewer/importing.py` performs cancellable discovery, cache checks and incremental import off the GUI thread.
 - `viewer/reading.py` provides conversation navigation, finding/highlighting, zoom, headers and attachment actions.
 - `viewer/preferences.py` and `viewer/cache_manager.py` provide local settings and safe cache management.
+- `viewer/list_controls.py` provides mail tabs and outline icon menus; `viewer/date_groups.py` assigns local calendar headings.
 - `viewer/dovecot_index.py` validates supported main indexes and transaction logs.
 - `viewer/operations.py` supplies cooperative cancellation during archive reads.
 - `viewer/version.py` is the single source for the app and release version.

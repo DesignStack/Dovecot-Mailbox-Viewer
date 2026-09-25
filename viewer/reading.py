@@ -3,10 +3,12 @@ import re
 import tempfile
 from pathlib import Path
 from html import escape
-from PySide6.QtGui import QAction, QColor, QTextCursor, QTextDocument, QFont, QTextCharFormat
+from PySide6.QtGui import QAction, QActionGroup, QColor, QTextCursor, QTextDocument, QFont, QTextCharFormat
 from PySide6.QtWidgets import (QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QComboBox, QWidget, QPlainTextEdit, QPushButton, QTextEdit, QFileDialog, QMessageBox)
+    QComboBox, QMenu, QToolButton, QInputDialog, QWidget, QPlainTextEdit, QPushButton, QTextEdit, QFileDialog, QMessageBox)
 from viewer.catalog import html_to_text
+from viewer.icons import line_icon
+from PySide6.QtCore import QSize, Qt
 from viewer.attachments import suggested_filename
 from viewer.preferences import SettingsDialog, write_preferences
 from viewer.cache_manager import CacheDialog
@@ -18,7 +20,7 @@ def original_headers(raw):
 
 
 class ReadingMixin:
-    def setup_reading(self, layout):
+    def setup_reading(self, layout, tools_layout):
         self.conversation_row = QWidget()
         thread_layout = QHBoxLayout(self.conversation_row)
         thread_layout.setContentsMargins(0, 0, 0, 0)
@@ -33,21 +35,35 @@ class ReadingMixin:
         self.conversation_row.hide()
         layout.addWidget(self.conversation_row)
 
-        row = QHBoxLayout()
-        self.body_mode = QComboBox()
-        self.body_mode.addItems(['HTML view', 'Plain text'])
-        self.body_mode.setCurrentIndex(int(self.preferences['plain_text']))
-        self.body_mode.setAccessibleName('Email display format')
-        self.body_mode.currentIndexChanged.connect(self.render_body)
-        row.addWidget(self.body_mode)
+        # The reader shares one unobtrusive icon row with its existing action menu.
         self.find_button = self._tool('Find in this email (Ctrl+G)', 'search', self.show_find)
-        row.addWidget(self.find_button)
-        row.addStretch()
-        row.addWidget(self._tool('Zoom out', 'minus', lambda: self.change_zoom(-10)))
-        self.zoom_label = QLabel()
-        row.addWidget(self.zoom_label)
-        row.addWidget(self._tool('Zoom in', 'plus', lambda: self.change_zoom(10)))
-        layout.addLayout(row)
+        self.zoom_button = self._tool('Zoom · 100%', 'zoom')
+        self.zoom_button.setAccessibleName('Reading zoom')
+        self.zoom_menu = QMenu(self.zoom_button)
+        self.zoom_group = QActionGroup(self)
+        self.zoom_actions = {}
+        for value in (60, 75, 90, 100, 110, 125, 150, 175, 200):
+            action = self.zoom_menu.addAction(f'{value}%' + (' (default)' if value == 100 else ''))
+            action.setCheckable(True)
+            self.zoom_group.addAction(action)
+            action.triggered.connect(lambda checked=False, percent=value: self.set_zoom(percent))
+            self.zoom_actions[value] = action
+        self.zoom_menu.addSeparator()
+        self.custom_zoom_action = self.zoom_menu.addAction('Custom…', self.custom_zoom)
+        self.zoom_button.setMenu(self.zoom_menu)
+        self.zoom_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.html_button = self._tool('HTML view', 'code')
+        self.html_button.setAccessibleName('HTML view')
+        self.html_button.setCheckable(True)
+        self.html_button.setChecked(not self.preferences['plain_text'])
+        self.html_button.toggled.connect(self.toggle_html)
+        self.update_html_control()
+        for button in (self.find_button, self.zoom_button, self.html_button):
+            button.setObjectName('mailTool')
+            button.setIconSize(QSize(19, 19))
+            button.setFixedSize(32, 34)
+            tools_layout.insertWidget(tools_layout.count() - 1, button, 0, Qt.AlignmentFlag.AlignTop)
+        self.more_button.setFixedSize(32, 34)
         self.find_bar = QWidget()
         find_layout = QHBoxLayout(self.find_bar)
         find_layout.setContentsMargins(0, 0, 0, 0)
@@ -64,7 +80,6 @@ class ReadingMixin:
         self.find_bar.hide()
         layout.addWidget(self.find_bar)
         self._zoom = 100
-        self.zoom_label.setText(f"{self.preferences['zoom']}%")
         self._body = None
         for title, shortcut, handler in [('Find in email', 'Ctrl+G', self.show_find),
                 ('Next match', 'F3', self.find_next), ('Previous match', 'Shift+F3', lambda: self.find_next(True))]:
@@ -85,7 +100,7 @@ class ReadingMixin:
         if not self._body:
             return
         msg, plain, html = self._body
-        self.preview.display(html if html and self.body_mode.currentIndex() == 0 else
+        self.preview.display(html if html and self.html_button.isChecked() else
             f"<pre style='white-space:pre-wrap'>{escape(plain or html_to_text(html) or '(No readable text body)')}</pre>", msg)
         self._font_runs = []
         block = self.preview.document().begin()
@@ -120,12 +135,36 @@ class ReadingMixin:
             format.setFont(font)
             cursor.mergeCharFormat(format)
         self._zoom = target
-        self.zoom_label.setText(f'{target}%')
+        self.zoom_button.setToolTip(f'Zoom · {target}%')
+        self.zoom_button.setAccessibleDescription(f'Current text zoom {target}%')
+        for value, action in self.zoom_actions.items():
+            action.setChecked(value == target)
+        self.custom_zoom_action.setText('Custom…' if target in self.zoom_actions else f'Custom… ({target}%)')
 
-    def change_zoom(self, delta):
-        self.preferences['zoom'] = max(60, min(200, self.preferences['zoom'] + delta))
+    def set_zoom(self, percent):
+        self.preferences['zoom'] = max(60, min(200, int(percent)))
         self.apply_zoom()
         write_preferences(self.settings, self.preferences)
+
+    def change_zoom(self, delta):
+        self.set_zoom(self.preferences['zoom'] + delta)
+
+    def custom_zoom(self):
+        value, ok = QInputDialog.getInt(self, 'Reading zoom', 'Text size (%)',
+                                       self.preferences['zoom'], 60, 200, 5)
+        if ok:
+            self.set_zoom(value)
+
+    def update_html_control(self):
+        enabled = self.html_button.isChecked()
+        self.html_button.setToolTip('HTML view on · click for plain text' if enabled else 'Plain text view · click for HTML')
+        self.html_button.setIcon(line_icon('code', '#1767b2' if enabled else '#59616d'))
+
+    def toggle_html(self, enabled):
+        self.preferences['plain_text'] = not enabled
+        write_preferences(self.settings, self.preferences)
+        self.update_html_control()
+        self.render_body()
 
     def show_find(self):
         self.find_bar.show()
@@ -258,11 +297,9 @@ class ReadingMixin:
             self.clear_recent()
         if not self.preferences['remember_layout']:
             self.settings.remove('layout')
-        self.sort_picker.blockSignals(True)
-        self.sort_picker.setCurrentIndex(self.sort_picker.findData(self.preferences['sort']))
-        self.sort_picker.blockSignals(False)
+        self.list_header.sync(self.preferences)
         self.conversations_action.setChecked(self.preferences['conversations'])
-        self.body_mode.setCurrentIndex(int(self.preferences['plain_text']))
+        self.html_button.setChecked(not self.preferences['plain_text'])
         self.apply_zoom()
         self.page_offset = 0
         self.refresh_messages()

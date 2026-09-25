@@ -51,6 +51,20 @@ def run(app, window_class, report_path: Path) -> int:
             window.listing.setCurrentRow(0)
             app.processEvents()
             assert "Portable mailbox check" in window.preview.toPlainText(), "HTML preview failed"
+            window.list_header.unread_button.click()
+            assert window.listing.count() == 0, "Unknown flags were treated as unread"
+            window.list_header.all_button.click()
+            assert window.listing.count() == 1, "All tab did not restore the message"
+            window.list_header.mode_actions['compact'].trigger()
+            assert window.preferences['list_mode'] == 'compact', "Compact layout menu failed"
+            window.list_header.sort_actions['subject_asc'].trigger()
+            assert window.preferences['sort'] == 'subject_asc', "Sort icon menu failed"
+            window.zoom_actions[125].trigger()
+            assert window.preferences['zoom'] == 125, "Zoom menu failed"
+            window.html_button.click()
+            assert not window.html_button.isChecked(), "HTML toggle failed"
+            window.html_button.click()
+            assert "Portable mailbox check" in window.preview.toPlainText(), "HTML toggle lost the body"
             assert len(window.catalogue.messages(None, "Portable")) == 1, "Search failed"
             pdf = root / 'printed-email.pdf'
             save_pdf(window.print_document(), pdf, 'Portable check')

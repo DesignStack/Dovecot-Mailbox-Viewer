@@ -5,6 +5,36 @@ with its own notes and Windows download. Earlier development builds were unversi
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-25
+
+### Added
+
+- Underlined Unread / All tabs above the message list. Unread uses known Dovecot
+  flags, combines with folder/search filters and never marks messages as read.
+- Outline icon menus for sorting and switching between Preview (three lines)
+  and Compact (sender, date and subject) list layouts. Layout and sort choices
+  are remembered and also available in Settings.
+- Date headings for Today, Yesterday, This Week, Last Week, Two Weeks Ago,
+  Three Weeks Ago, Earlier This Month, Last Month and Older. Only populated
+  sections appear; future and unknown dates have their own fallback headings.
+- Local calendar date grouping with the system's first weekday, automatic
+  midnight refresh and consistent group headings across page boundaries.
+- A magnifying-glass zoom menu with presets, custom 60–200% zoom and a 100% default.
+- A code icon to toggle HTML/plain text. HTML is enabled by default, and explicit
+  display preferences are remembered. Remote image consent remains separate.
+
+### Changed
+
+- Removed the sorting dropdown, format dropdown and plus/minus zoom row from the
+  main interface. Reading controls now sit at the top right beside email actions.
+- Compact list styling and a lighter selection background with a blue edge.
+- Date grouping applies to date sorting; sender/subject sorting remains alphabetical.
+- Date headings are presentation only, so selection, result counts, pagination and
+  exports continue to contain messages rather than decorative heading rows.
+- Existing v0.3.0 search caches remain reusable; this update needs no schema rebuild.
+- Added regression tests for calendar boundaries, unread filtering, grouped
+  pagination/exports, icon controls and saved view preferences.
+
 ## [0.3.0] - 2026-09-25
 
 ### Added

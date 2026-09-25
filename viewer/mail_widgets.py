@@ -44,18 +44,38 @@ class FolderDelegate(QStyledItemDelegate):
 
 
 class MessageDelegate(QStyledItemDelegate):
+    # Date headings are painted above the group's first email instead of adding
+    # fake message rows. Selection, pagination and export therefore contain only mail.
+    GROUP_HEIGHT = 32
+
     def sizeHint(self, option, index):
-        return QSize(360, 96)
+        data = index.data(DETAILS_ROLE) or {}
+        height = 68 if data.get('mode') == 'compact' else 96
+        return QSize(250, height + (self.GROUP_HEIGHT if data.get('group_header') else 0))
 
     def paint(self, painter, option, index):
         data = index.data(DETAILS_ROLE) or {}
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         painter.save()
         painter.setRenderHint(painter.RenderHint.Antialiasing)
-        r = option.rect
-        painter.fillRect(r, QColor("#357ddb" if selected else "#ffffff"))
-        ink = "#ffffff" if selected else "#262d36"
-        muted = "#e6efff" if selected else "#7b838e"
+        r = QRect(option.rect)
+        if data.get('group_header'):
+            header = QRect(r.x(), r.y(), r.width(), self.GROUP_HEIGHT)
+            painter.fillRect(header, QColor('#f8f9fb'))
+            font = QFont(option.font)
+            font.setPixelSize(12)
+            font.setWeight(QFont.Weight.Medium)
+            painter.setFont(font)
+            painter.setPen(QColor('#505c6b'))
+            painter.drawText(header.adjusted(22, 0, -16, 0), Qt.AlignmentFlag.AlignVCenter, data['group_header'])
+            painter.setPen(QColor('#e6e9ee'))
+            painter.drawLine(header.bottomLeft(), header.bottomRight())
+            r.setTop(r.top() + self.GROUP_HEIGHT)
+        painter.fillRect(r, QColor('#e8f1fc' if selected else '#ffffff'))
+        if selected:
+            painter.fillRect(QRect(r.left(), r.top(), 3, r.height()), QColor('#1767b2'))
+        ink = '#262d36'
+        muted = '#657386'
         left = r.x() + 22
         width = r.width() - 38
 
@@ -88,16 +108,16 @@ class MessageDelegate(QStyledItemDelegate):
 
         if data.get("unread"):
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#ffffff" if selected else "#357ddb"))
+            painter.setBrush(QColor("#1767b2"))
             painter.drawEllipse(r.x() + 9, r.y() + 20, 5, 5)
         text(data.get("sender", ""), QRect(left, r.y() + 10, max(0, width - 100), 24), 14, ink, data.get("unread", False))
         text(data.get("date", ""), QRect(r.right() - 108, r.y() + 10, 94, 24), 11, muted)
         attachment_space = 24 if data.get("attachment") else 0
         text(data.get("subject", ""), QRect(left, r.y() + 34, width - attachment_space, 21), 13, ink, data.get("unread", False))
         if attachment_space:
-            line_icon("attachment").paint(painter, QRect(r.right() - 32, r.y() + 36, 16, 16),
-                                          mode=QIcon.Mode.Selected if selected else QIcon.Mode.Normal)
-        text(data.get("snippet", ""), QRect(left, r.y() + 57, width, 23), 12, muted)
-        painter.setPen(QColor("#ffffff" if selected else "#eef0f3"))
+            line_icon("attachment").paint(painter, QRect(r.right() - 32, r.y() + 36, 16, 16))
+        if data.get('mode') != 'compact':
+            text(data.get("snippet", ""), QRect(left, r.y() + 57, width, 23), 12, muted)
+        painter.setPen(QColor("#eef0f3"))
         painter.drawLine(r.bottomLeft(), r.bottomRight())
         painter.restore()

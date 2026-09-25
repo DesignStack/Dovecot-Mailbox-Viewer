@@ -1,18 +1,18 @@
 """Dovecot Mailbox Viewer desktop interface."""
 
 from pathlib import Path
-from email.utils import parsedate_to_datetime, parseaddr
+from email.utils import parseaddr
 import sys
 import logging
 from logging.handlers import RotatingFileHandler
 
-from PySide6.QtCore import QTimer, Slot, Qt, QUrl, QSize
+from PySide6.QtCore import QTimer, Slot, Qt, QUrl, QSize, QLocale, QDate
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QDialogButtonBox,
     QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMainWindow, QMenu, QMessageBox, QProgressBar, QSplitter, QInputDialog,
-    QScrollArea, QStackedWidget, QToolButton, QComboBox, QPushButton, QVBoxLayout, QWidget, QProgressDialog,
+    QScrollArea, QStackedWidget, QToolButton, QPushButton, QVBoxLayout, QWidget, QProgressDialog,
 )
 from PySide6.QtPrintSupport import QPrintDialog
 
@@ -32,6 +32,8 @@ from viewer.importing import OpenWorker
 from viewer.reading import ReadingMixin
 from viewer.preferences import read_preferences, write_preferences
 from viewer.catalog import SORTS
+from viewer.list_controls import MessageListHeader
+from viewer.date_groups import date_group, message_date_label
 
 
 def log_path() -> Path:
@@ -127,6 +129,7 @@ class Window(ReadingMixin, QMainWindow):
         self.settings = self.recent_backups.settings
         self.preferences = read_preferences(self.settings)
         self.page_offset = 0
+        self.unread_only = False
         self._filter_identity = None
         self._closing = False
         self.import_incomplete = False
@@ -154,6 +157,15 @@ class Window(ReadingMixin, QMainWindow):
             QToolButton { border: 1px solid transparent; background: transparent;
                 border-radius: 6px; padding: 7px; }
             QToolButton:hover, QToolButton:pressed { background: #e8ecf2; }
+            QToolButton:checked { background: #eaf1fb; border-color: #c7d9ef; }
+            QPushButton#mailTab { background: transparent; border: 0;
+                border-bottom: 2px solid transparent; border-radius: 0;
+                padding: 0 4px; margin: 0 5px; font-size: 14px; }
+            QPushButton#mailTab:hover { color: #145da0; background: #f8fafc; }
+            QPushButton#mailTab:checked { border-bottom-color: #1767b2;
+                color: #202b37; font-weight: 600; }
+            QPushButton#mailTab:focus { background: #edf4fc; }
+            QToolButton#mailTool, QToolButton#emailActions { padding: 5px; }
             QToolButton:focus { border-color: #8db4e5; }
             QToolButton::menu-indicator { image: none; width: 0; }
             QPushButton { border: 1px solid #dce1e7; background: white; border-radius: 5px; padding: 7px 14px; }
@@ -163,8 +175,7 @@ class Window(ReadingMixin, QMainWindow):
             QWidget#messageColumn { background: #ffffff; }
             QFrame#messageHeader { background: #ffffff; border-bottom: 1px solid #edf0f3; }
             QLabel#mailboxName { font-weight: 600; padding: 16px 18px; color: #424b58; }
-            QLabel#folderTitle { font-size: 15px; font-weight: 600; }
-            QLabel#messageCount, QLabel#details { color: #78818f; }
+            QLabel#details { color: #78818f; }
             QWidget#readingPane { background: #f1f3f6; }
             QFrame#messageCard { background: white; border: 1px solid #e0e4ea; border-radius: 9px; }
             QLabel#subject { font-size: 19px; font-weight: 600; color: #28313d; }
@@ -313,24 +324,11 @@ class Window(ReadingMixin, QMainWindow):
         middle_layout = QVBoxLayout(middle)
         middle_layout.setContentsMargins(0, 0, 0, 0)
         middle_layout.setSpacing(0)
-        middle_header = QFrame()
-        middle_header.setObjectName("messageHeader")
-        header_layout = QHBoxLayout(middle_header)
-        header_layout.setContentsMargins(22, 16, 18, 16)
-        self.folder_title = QLabel("All mail")
-        self.folder_title.setObjectName("folderTitle")
-        self.message_count = QLabel("")
-        self.message_count.setObjectName("messageCount")
-        header_layout.addWidget(self.folder_title, 1)
-        header_layout.addWidget(self.message_count)
-        middle_layout.addWidget(middle_header)
-        self.sort_picker = QComboBox()
-        self.sort_picker.setAccessibleName("Sort emails")
-        for key, (label, _) in SORTS.items():
-            self.sort_picker.addItem(label, key)
-        self.sort_picker.setCurrentIndex(self.sort_picker.findData(self.preferences['sort']))
-        self.sort_picker.currentIndexChanged.connect(self.sort_changed)
-        middle_layout.addWidget(self.sort_picker)
+        self.list_header = MessageListHeader(self.preferences)
+        self.list_header.unread_changed.connect(self.set_unread_filter)
+        self.list_header.sort_changed.connect(self.sort_changed)
+        self.list_header.mode_changed.connect(self.set_list_mode)
+        middle_layout.addWidget(self.list_header)
         self.listing = QListWidget()
         self.listing.setObjectName("messages")
         self.listing.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -408,7 +406,7 @@ class Window(ReadingMixin, QMainWindow):
         self.attachment_cards = AttachmentList()
         self.attachment_cards.save_requested.connect(self.save_attachment_at)
         card_layout.addWidget(self.attachment_cards)
-        self.setup_reading(card_layout)
+        self.setup_reading(card_layout, title_row)
 
         self.image_notice = QFrame()
         self.image_notice.setObjectName("imageNotice")
@@ -474,6 +472,18 @@ class Window(ReadingMixin, QMainWindow):
             if panes is not None:
                 self.panes.restoreState(panes)
         self.apply_zoom()
+        # Refresh relative date labels after midnight without reopening the backup.
+        self._group_day = QDate.currentDate()
+        self.date_timer = QTimer(self)
+        self.date_timer.setInterval(60_000)
+        self.date_timer.timeout.connect(self.refresh_date_groups)
+        self.date_timer.start()
+
+    def refresh_date_groups(self):
+        day = QDate.currentDate()
+        if day != self._group_day:
+            self._group_day = day
+            self.refresh_messages()
 
     def refresh_recent(self):
         entries = self.recent_backups.entries()
@@ -699,6 +709,8 @@ class Window(ReadingMixin, QMainWindow):
         self.search.clear()
         self.search.blockSignals(False)
         self.search_options = {}
+        self.unread_only = False
+        self.list_header.all_button.setChecked(True)
         self.page_offset = 0
         self._filter_identity = None
         preferred = next((entry['account'] for entry in self.recent_backups.entries()
@@ -855,15 +867,15 @@ class Window(ReadingMixin, QMainWindow):
         selected = self.folders.currentItem()
         folder = selected.data(Qt.ItemDataRole.UserRole) if selected else None
         try:
-            filters = dict(folder=folder, query=self.search.text(), **self.search_options)
-            identity = (tuple(sorted(filters.items())), self.sort_picker.currentData(), self.preferences['conversations'])
+            filters = dict(folder=folder, query=self.search.text(), unread_only=self.unread_only, **self.search_options)
+            identity = (tuple(sorted(filters.items())), self.preferences['sort'], self.preferences['conversations'])
             if identity != self._filter_identity:
                 self.page_offset = 0
                 self._filter_identity = identity
             total = self.catalogue.matching_count(conversations=self.preferences['conversations'], **filters)
             page_size = self.preferences['page_size']
             self.page_offset = min(self.page_offset, max(0, ((total-1)//page_size)*page_size))
-            rows = self.catalogue.messages(**filters, sort=self.sort_picker.currentData(),
+            rows = self.catalogue.messages(**filters, sort=self.preferences['sort'],
                 limit=page_size, offset=self.page_offset, conversations=self.preferences['conversations'])
         except Exception as exc:
             self.statusBar().showMessage(f"Search error: {exc}")
@@ -874,12 +886,14 @@ class Window(ReadingMixin, QMainWindow):
         scroll_position = self.listing.verticalScrollBar().value()
         self.listing.blockSignals(True)
         self.listing.clear()
+        previous_group = None
+        first_weekday = QLocale.system().firstDayOfWeek().value - 1
         for row in rows:
             sender = parseaddr(row["sender"] or "")[0] or parseaddr(row["sender"] or "")[1] or "Unknown sender"
-            try:
-                shown_date = parsedate_to_datetime(row["date"]).strftime("%d %b %Y")
-            except (TypeError, ValueError, IndexError):
-                shown_date = ""
+            shown_date = message_date_label(row['sent_timestamp'])
+            group = date_group(row['sent_timestamp'], first_weekday=first_weekday) if self.preferences['sort'].startswith('date_') else ''
+            group_header = group if group != previous_group else ''
+            previous_group = group
             snippet = " ".join((row["body"] or "").split())[:180]
             subject = row["subject"] or "(No subject)"
             status_label = "Expunged · " if row["expunged"] else (
@@ -888,9 +902,12 @@ class Window(ReadingMixin, QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, row["id"])
             item.setData(DETAILS_ROLE, dict(sender=sender, date=shown_date, subject=status_label + (f"({row['thread_count']}) " if row['thread_count'] > 1 else "") + subject,
                 snippet=snippet, attachment=bool(row["has_attachment"]), thread=row['thread_key'],
+                mode=self.preferences['list_mode'], group_header=group_header,
                 thread_count=row['thread_count'], highlight=self.search.text() if self.preferences['highlight'] else '', 
                 unread=row["status"] is not None and not row["status"] & SEEN))
-            item.setToolTip(f"{row['date']} · {row['folder']}")
+            item.setData(Qt.ItemDataRole.AccessibleTextRole, f"{group}. {sender}. {subject}. {shown_date}")
+            state = 'Status unknown' if row['status'] is None else ('Read' if row['status'] & SEEN else 'Unread')
+            item.setToolTip(f"{row['date']} · {row['folder']} · {state}")
             self.listing.addItem(item)
         if selected_id is not None:
             for index in range(self.listing.count()):
@@ -908,8 +925,7 @@ class Window(ReadingMixin, QMainWindow):
         self.listing.verticalScrollBar().setValue(scroll_position)
         self.listing.blockSignals(False)
         label = (selected.data(DETAILS_ROLE) or {}).get("label", "All mail") if selected else "All mail"
-        self.folder_title.setText("Search results" if self.search.text() or any(self.search_options.values()) else label)
-        self.message_count.setText(str(total))
+        self.listing.setAccessibleName(f"{label} · {'Unread' if self.unread_only else 'All'} · {total} results")
         self.page_label.setText(f"{self.page_offset+1 if rows else 0}–{self.page_offset+len(rows)} of {total:,}")
         self.previous_page.setEnabled(self.page_offset > 0)
         self.next_page.setEnabled(self.page_offset + len(rows) < total)
@@ -922,7 +938,7 @@ class Window(ReadingMixin, QMainWindow):
     def show_message(self, _=None):
         item = self.listing.currentItem()
         if not item or not self.catalogue:
-            self.reset_preview("No emails to display" if self.catalogue else "Open a mailbox to start reading")
+            self.reset_preview(("No unread emails in this view" if self.unread_only else "No emails to display") if self.catalogue else "Open a mailbox to start reading")
             return
         ident = item.data(Qt.ItemDataRole.UserRole)
         if self.preferences['conversations'] and self.shown_message is not None:
@@ -1131,10 +1147,28 @@ class Window(ReadingMixin, QMainWindow):
         self.refresh_messages()
         self.listing.verticalScrollBar().setValue(0)
 
-    def sort_changed(self):
-        self.preferences['sort'] = self.sort_picker.currentData()
+    def set_unread_filter(self, unread):
+        self.unread_only = unread
+        self.page_offset = 0
+        self.list_header.unread_button.setChecked(unread)
+        self.list_header.all_button.setChecked(not unread)
+        self.refresh_messages()
+
+    def sort_changed(self, order):
+        if order not in SORTS:
+            return
+        self.preferences['sort'] = order
+        self.list_header.sync(self.preferences)
         write_preferences(self.settings, self.preferences)
         self.page_offset = 0
+        self.refresh_messages()
+
+    def set_list_mode(self, mode):
+        if mode not in ('preview', 'compact'):
+            return
+        self.preferences['list_mode'] = mode
+        self.list_header.sync(self.preferences)
+        write_preferences(self.settings, self.preferences)
         self.refresh_messages()
 
     def toggle_conversations(self, enabled):
@@ -1154,8 +1188,6 @@ class Window(ReadingMixin, QMainWindow):
         self.folders.blockSignals(False)
         self.listing.clear()
         self.reset_preview()
-        self.folder_title.setText("All mail")
-        self.message_count.clear()
         self.page_label.clear()
         self.source = None
         self.account_name = ""

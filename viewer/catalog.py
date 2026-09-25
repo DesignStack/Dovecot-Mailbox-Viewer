@@ -198,7 +198,7 @@ class Catalogue:
             GROUP BY folders.name ORDER BY folders.name COLLATE NOCASE""").fetchall()
 
     @staticmethod
-    def _filters(folder=None, query="", sender="", subject="", attachments=False, after="", before=""):
+    def _filters(folder=None, query="", sender="", subject="", attachments=False, after="", before="", unread_only=False):
         clauses, args = ["1=1"], []
         for column, value in (("folder", folder), ("sender", sender.strip()), ("subject", subject.strip())):
             if value:
@@ -206,6 +206,9 @@ class Catalogue:
                 args.append(value if column == 'folder' else f"%{value}%")
         if attachments:
             clauses.append("has_attachment=1")
+        if unread_only:
+            # Unknown index state is not evidence that a message is unread.
+            clauses.append("status IS NOT NULL AND (status & 8)=0")
         for op, value in ((">=", after), ("<=", before)):
             if value:
                 clauses.append(f"sent_day {op} ?")
@@ -222,12 +225,12 @@ class Catalogue:
         return self.conn.execute(f"SELECT count({column}) FROM messages WHERE {where}", args).fetchone()[0]
 
     def messages(self, folder=None, query="", sender="", subject="", attachments=False,
-                 after="", before="", *, sort="date_desc", limit=200, offset=0, conversations=False):
-        where, args = self._filters(folder, query, sender, subject, attachments, after, before)
+                 after="", before="", *, unread_only=False, sort="date_desc", limit=200, offset=0, conversations=False):
+        where, args = self._filters(folder, query, sender, subject, attachments, after, before, unread_only)
         order = SORTS.get(sort, SORTS['date_desc'])[1]
         # Invalid/missing Date headers sort last in either date direction.
         order = ("sent_timestamp IS NULL, " if sort.startswith('date_') else '') + order + ", id DESC"
-        columns = "id, folder, sender, subject, date, substr(body,1,500) AS body, has_attachment, status, expunged, thread_key"
+        columns = "id, folder, sender, subject, date, substr(body,1,500) AS body, has_attachment, status, expunged, thread_key, sent_timestamp"
         if conversations:
             sql = f"""WITH matches AS (SELECT *,
                 row_number() OVER (PARTITION BY coalesce(thread_key,'local:'||id)

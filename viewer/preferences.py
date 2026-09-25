@@ -2,7 +2,7 @@
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QComboBox, QCheckBox, QDialogButtonBox, QLabel, QSpinBox
 from viewer.catalog import SORTS
 
-DEFAULTS = dict(sort='date_desc', page_size=200, conversations=False, highlight=True,
+DEFAULTS = dict(list_mode='preview', sort='date_desc', page_size=200, conversations=False, highlight=True,
                 plain_text=False, zoom=100, remember_layout=True, remember_recent=True)
 
 
@@ -22,6 +22,8 @@ def read_preferences(settings):
         result['sort'] = 'date_desc'
     if result['page_size'] not in (100, 200, 500):
         result['page_size'] = 200
+    if result['list_mode'] not in ('compact', 'preview'):
+        result['list_mode'] = 'preview'
     result['zoom'] = max(60, min(200, result['zoom']))
     return result
 
@@ -43,6 +45,10 @@ class SettingsDialog(QDialog):
         for key, (label, _) in SORTS.items():
             self.sort.addItem(label, key)
         self.sort.setCurrentIndex(self.sort.findData(values['sort']))
+        self.mode = QComboBox()
+        self.mode.addItem('Preview', 'preview')
+        self.mode.addItem('Compact', 'compact')
+        self.mode.setCurrentIndex(self.mode.findData(values['list_mode']))
         self.page = QComboBox()
         for size in (100, 200, 500):
             self.page.addItem(str(size), size)
@@ -53,6 +59,7 @@ class SettingsDialog(QDialog):
         self.zoom.setSuffix('%')
         self.zoom.setValue(values['zoom'])
         form.addRow('Default sorting', self.sort)
+        form.addRow('Message list layout', self.mode)
         form.addRow('Emails per page', self.page)
         form.addRow('Reading zoom', self.zoom)
         self.checks = {}
@@ -74,5 +81,5 @@ class SettingsDialog(QDialog):
         outer.addWidget(buttons)
 
     def values(self):
-        return dict(sort=self.sort.currentData(), page_size=self.page.currentData(), zoom=self.zoom.value(),
+        return dict(list_mode=self.mode.currentData(), sort=self.sort.currentData(), page_size=self.page.currentData(), zoom=self.zoom.value(),
                     **{key: box.isChecked() for key, box in self.checks.items()})
