@@ -15,6 +15,7 @@ from viewer.operations import CheckedReader
 HEADER = re.compile(rb"\x01\x02([NP]) +([0-9a-fA-F]{1,16})\r?\n")
 FOOTER = b"\n\x01\x03\n"
 MAX_RECORD = 256 * 1024 * 1024  # Reject implausible lengths in untrusted backups.
+GZIP_MAGIC = b"\x1f\x8b"
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,28 @@ def _discover_entries(entries):
     return result
 
 
+def _decode_payload(payload: bytes, source: str) -> bytes:
+    """Detect gzip per message; normal dbox records may also be uncompressed.
+
+    Dovecot's N record type means "normal", not "compressed". Like Dovecot's
+    compression detector, inspect the payload signature instead. A corrupt gzip
+    stream must raise an error, never be silently indexed as plain email.
+    """
+    if not payload.startswith(GZIP_MAGIC):
+        return payload
+    decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        # One extra byte distinguishes an oversized message from an exact fit.
+        raw = decompressor.decompress(payload, MAX_RECORD + 1)
+    except zlib.error as exc:
+        raise ValueError(f"{source}: invalid gzip message") from exc
+    if len(raw) > MAX_RECORD:
+        raise ValueError(f"{source}: gzip message exceeds the {MAX_RECORD}-byte limit")
+    if not decompressor.eof or decompressor.unused_data or decompressor.unconsumed_tail:
+        raise ValueError(f"{source}: incomplete or invalid gzip message")
+    return raw
+
+
 def records(stream, source: str, check=lambda: None):
     """Yield complete message records, validating framing and gzip streams."""
     first = stream.readline(200)
@@ -96,13 +119,7 @@ def records(stream, source: str, check=lambda: None):
         payload = stream.read(length)
         if len(payload) != length:
             raise ValueError(f"{source}: truncated message")
-        if match[1] == b"N":
-            decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
-            raw = decompressor.decompress(payload, MAX_RECORD)
-            if not decompressor.eof or decompressor.unused_data:
-                raise ValueError(f"{source}: incomplete or invalid gzip message")
-        else:
-            raw = payload
+        raw = _decode_payload(payload, source)
         if stream.read(len(FOOTER)) != FOOTER:
             raise ValueError(f"{source}: missing message footer")
         attributes = {}

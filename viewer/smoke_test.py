@@ -32,8 +32,13 @@ def run(app, window_class, report_path: Path) -> int:
                    b"MIME-Version: 1.0\nContent-Type: text/html; charset=utf-8\n\n"
                    b"<p>Portable mailbox check</p>\n")
             compressed = gzip.compress(raw)
-            record = (b"2 M1e C00000000\n\x01\x02N " + f"{len(compressed):016X}".encode()
-                      + b"\n" + compressed + b"\n\x01\x03\nBINBOX\n\n")
+            plain = b"Subject: Uncompressed check\n\nUncompressed mailbox check\n"
+            # Both records are type N: compression belongs to each payload.
+            record = b"2 M1e C00000000\n"
+            for payload in (compressed, plain):
+                record += (b"\x01\x02N " + b" " * 8 + b" "
+                           + f"{len(payload):016x}".encode() + b"\n" + payload
+                           + b"\n\x01\x03\nBINBOX\n\n")
             (storage / "m.1").write_bytes(record)
             window.show()
             window.show_welcome()
@@ -47,14 +52,16 @@ def run(app, window_class, report_path: Path) -> int:
                 app.processEvents()
                 time.sleep(0.01)
             assert window.worker_thread is None, "Import did not finish"
-            assert window.listing.count() == 1, "Imported message is missing"
+            assert window.listing.count() == 2, "Mixed-compression import lost a message"
+            window.list_header.sort_actions['subject_asc'].trigger()
             window.listing.setCurrentRow(0)
             app.processEvents()
             assert "Portable mailbox check" in window.preview.toPlainText(), "HTML preview failed"
             window.list_header.unread_button.click()
             assert window.listing.count() == 0, "Unknown flags were treated as unread"
             window.list_header.all_button.click()
-            assert window.listing.count() == 1, "All tab did not restore the message"
+            assert window.listing.count() == 2, "All tab did not restore both messages"
+            window.listing.setCurrentRow(0)
             window.list_header.mode_actions['compact'].trigger()
             assert window.preferences['list_mode'] == 'compact', "Compact layout menu failed"
             window.list_header.sort_actions['subject_asc'].trigger()
@@ -66,12 +73,14 @@ def run(app, window_class, report_path: Path) -> int:
             window.html_button.click()
             assert "Portable mailbox check" in window.preview.toPlainText(), "HTML toggle lost the body"
             assert len(window.catalogue.messages(None, "Portable")) == 1, "Search failed"
+            assert len(window.catalogue.messages(None, "Uncompressed")) == 1, "Plain mail search failed"
             pdf = root / 'printed-email.pdf'
             save_pdf(window.print_document(), pdf, 'Portable check')
             assert pdf.read_bytes().startswith(b'%PDF-'), 'PDF export failed'
             exported, count, cancelled = export_messages(window.catalogue.path, root, folder='INBOX')
-            assert count == 1 and not cancelled, 'Bulk export failed'
-            assert next(exported.rglob('*.eml')).read_bytes() == raw, 'Exported email differs from original'
+            assert count == 2 and not cancelled, 'Bulk export failed'
+            assert {path.read_bytes() for path in exported.rglob('*.eml')} == {raw, plain}, \
+                'Exported emails differ from the original message bytes'
             assert (storage / "m.1").read_bytes() == record, "Source backup was changed"
             # Remove only the derived synthetic cache, then close before temp cleanup.
             window.clear_cache()

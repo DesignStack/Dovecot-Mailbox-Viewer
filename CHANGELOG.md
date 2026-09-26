@@ -5,6 +5,21 @@ with its own notes and Windows download. Earlier development builds were unversi
 
 ## [Unreleased]
 
+### Fixed
+
+- Open uncompressed Dovecot mdbox messages without a manual decompression bypass.
+  The `N` record type means normal message, not gzip-compressed message. Detect
+  gzip from each payload so mixed compressed/uncompressed storage also works.
+- Keep gzip validation and decompression size limits, with source-specific errors
+  for corrupt, truncated or oversized messages.
+
+### Added
+
+- Community-tested Debian 13 installation instructions using system PySide6 packages.
+- Synthetic regressions for mixed-compression storage in folders and `.tar.gz`
+  backups, byte-preserving MIME handling and invalid gzip streams. The packaged
+  Windows check now imports, searches and exports both message formats.
+
 ## [0.4.0] - 2026-09-25
 
 ### Added

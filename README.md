@@ -122,6 +122,8 @@ is available after an import/export has finished or been cancelled.
 
 ## Run from source
 
+### Windows
+
 Install Python 3.11+ on Windows, then in PowerShell:
 
 ```powershell
@@ -130,6 +132,31 @@ py -m venv .venv
 pip install -r requirements.txt
 python -m viewer.app
 ```
+
+### Debian 13 (community-tested)
+
+A Dovecot community member reported running the app on Debian 13 using Debian's
+PySide6 packages. Download and extract this repository's source code, then install
+the dependencies:
+
+```bash
+sudo apt update
+sudo apt install python3-pyside6.qtgui python3-pyside6.qtwidgets \
+  python3-pyside6.qtprintsupport python3-pyside6.qtnetwork python3-pyside6.qtsvg
+```
+
+In a terminal, change into the extracted project folder (the one containing
+`README.md` and `viewer/`) and launch the app as your normal user:
+
+```bash
+python3 -m viewer.app
+```
+
+This route uses the system Python and packages; no virtual environment or pip
+installation is required. The Debian report is community verification, not a
+packaged Linux release or a guarantee of support on all Linux distributions.
+
+### Opening a backup
 
 On startup, a welcome guide explains the two ways to open your mailbox:
 
@@ -184,11 +211,17 @@ those dependencies and can be kept on its own.
 ## Scope and limitations
 
 - The source archive and extracted mailbox are never changed. Search caches and logs are stored in `%LOCALAPPDATA%/DesignStack/DovecotMailboxViewer`. The portable EXE also unpacks its runtime into a temporary folder; exports are written only where you choose to save them.
-- Recognises the dbox `m.*` container used by the supplied backup, including gzip-compressed message records and the `B<mailbox>` metadata. It discovers folders even if empty.
+- Recognises the dbox `m.*` container used by the supplied backup, including uncompressed and gzip-compressed message records and the `B<mailbox>` metadata. Compression is detected from each message's bytes, so both forms can coexist in one storage file; no compression switch is needed. Other message-compression codecs are not currently supported. It discovers folders even if empty.
 - Validated GUID-bearing, little-endian Dovecot 7.x main index snapshots and 1.0–1.3 transaction logs supply folder placement and read/deleted/expunged flags. Contiguous rotated logs are replayed after the snapshot's recorded position. Unsupported layouts, missing log history and ambiguous GUIDs remain unknown; `B` metadata supplies the fallback folder. Separate mdbox map indexes are not interpreted. This is not an exact live-mailbox reconstruction for every Dovecot version.
 - HTML messages render locally with external resources blocked by default. Loading external images is a per-message choice. Failed downloads keep the notice visible with a **Try again** link and diagnostic logging. Attachments are never run automatically.
 - Archives are processed one storage file at a time; a large archive requires free disk space for the private search database. Initial indexing may take time. Tar paths are never extracted to arbitrary destinations.
 - Verified with the supplied eight-message JetBackup sample and synthetic format/regression tests. Wider real-world Dovecot backup coverage is still needed before treating this as a general-purpose forensic viewer.
+
+The `.tar.gz` backup archive and the messages inside it have independent
+compression. An archive can contain uncompressed messages. Dovecot's `N` record
+type means normal message, not compressed message; the viewer checks the gzip
+signature instead. Transparent filesystem compression, such as ZFS compression,
+needs no special setting in the viewer.
 
 ## Code layout
 
