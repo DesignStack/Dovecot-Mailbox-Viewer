@@ -6,9 +6,7 @@ root = Path(SPECPATH).parent
 a = Analysis([str(root / 'viewer/app.py')], pathex=[str(root)],
              datas=[(str(root / 'dist/Third-party-notices.zip'), 'notices')],
              binaries=[], hiddenimports=[], hookspath=[], runtime_hooks=[], excludes=[])
-a.exclude_system_libraries(['libstdc++*', 'libgcc_s*', 'libxcb-cursor*', 'libxcb-icccm*',
-                           'libxcb-image*', 'libxcb-keysyms*', 'libxcb-render-util*',
-                           'libxcb-util*', 'libxcb-xinerama*', 'libxcb-xkb*', 'libxkbcommon-x11*'])
+a.exclude_system_libraries(['libstdc++*', 'libgcc_s*', 'libxcb*', 'libxkbcommon-x11*'])
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True,
           name='Dovecot-Mailbox-Viewer', debug=False, strip=False, upx=False, console=True)

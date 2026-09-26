@@ -67,9 +67,10 @@ def prepare():
     # Preserve the copyright notices for system libraries selected by the spec.
     copyrights = notices / 'Linux-system-libraries'
     copyrights.mkdir(exist_ok=True)
-    for package in ('libstdc++6', 'libgcc-s1', 'libxcb-cursor0', 'libxcb-icccm4', 'libxcb-image0',
-                    'libxcb-keysyms1', 'libxcb-render-util0', 'libxcb-util1', 'libxcb-xinerama0',
-                    'libxcb-xkb1', 'libxkbcommon-x11-0'):
+    packages = {'libstdc++6', 'libgcc-s1', 'libxkbcommon-x11-0'}
+    packages.update(path.name for path in Path('/usr/share/doc').glob('libxcb*')
+                    if (path / 'copyright').is_file())
+    for package in sorted(packages):
         source = Path('/usr/share/doc') / package / 'copyright'
         if not source.is_file():
             raise RuntimeError(f'Missing system library notice: {package}')

@@ -220,7 +220,7 @@ It embeds the app version in Windows file properties, checks the actual EXE
 from a clean folder and writes `dist/SHA256SUMS.txt`. No supporting folder is
 needed beside this executable.
 
-**Actions → Build Windows app → Run workflow** also builds it on Windows.
+**Actions → Build Windows and Linux apps → Run workflow** builds and checks both packages.
 New versions on `main` automatically become public GitHub Releases after all
 checks pass. The workflow never overwrites an already published version.
 See [Publishing a version](docs/releasing.md) for the version and changelog steps.
