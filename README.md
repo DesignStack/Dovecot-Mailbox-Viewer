@@ -1,6 +1,6 @@
 # Dovecot Mailbox Viewer
 
-[MIT licence](LICENSE) · [Windows download](https://github.com/DesignStack/Dovecot-Mailbox-Viewer/releases/latest/download/Dovecot-Mailbox-Viewer-Windows.exe) · [DesignStack](https://designstack.co.uk)
+[MIT licence](LICENSE) · [Windows download](https://github.com/DesignStack/Dovecot-Mailbox-Viewer/releases/latest/download/Dovecot-Mailbox-Viewer-Windows.exe) · [Linux download](https://github.com/DesignStack/Dovecot-Mailbox-Viewer/releases/latest/download/Dovecot-Mailbox-Viewer-Linux-x86_64.AppImage) · [DesignStack](https://designstack.co.uk)
 
 A local, read-only desktop viewer for Windows and Linux, for JetBackup/cPanel **mdbox** mail backups. Open a `.tar.gz` archive or the extracted `backup/email` directory. Mailbox content stays on your computer; the application makes a separate local cache for searching and previews.
 
