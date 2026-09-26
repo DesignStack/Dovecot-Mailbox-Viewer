@@ -5,6 +5,30 @@ with its own notes and Windows download. Earlier development builds were unversi
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-26
+
+### Added
+
+- A portable 64-bit Linux AppImage alongside the Windows executable.
+- Desktop launcher and icon, with no Python installation required for the AppImage.
+- Automated AppImage import/search/export checks on Ubuntu 22.04, plus clean
+  Ubuntu 24.04 and Debian 13 runtime checks before publication.
+- Linux dependency notices, native-file inventory and AppImage runtime/library
+  source archives, with checksums alongside the existing Qt/PySide sources.
+
+### Changed
+
+- Update checks require a download for the current operating system.
+- Windows and Linux packages are built from the same release commit. Publication
+  waits for both builds and the Linux compatibility checks to pass.
+
+### Known limitations
+
+- The AppImage targets x86-64 desktops with glibc 2.35 or newer and X11 or XWayland.
+  ARM, 32-bit Linux and native Wayland-only environments are not supported by this build.
+- Restricted environments may need the documented extract-and-run option.
+- PST export is not included. Mailboxes can be exported as individual `.eml` files.
+
 ## [0.4.1] - 2026-09-26
 
 ### Fixed

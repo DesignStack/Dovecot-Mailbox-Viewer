@@ -21,7 +21,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         data = (b' ' * (MAX_RESPONSE + 100) if self.path == '/large' else json.dumps({
             'tag_name': 'v0.10.0', 'draft': False, 'prerelease': False,
-            'assets': [{'name': 'Dovecot-Mailbox-Viewer-Windows.exe', 'state': 'uploaded'}],
+            'assets': [{'name': name, 'state': 'uploaded'} for name in
+                       ('Dovecot-Mailbox-Viewer-Windows.exe', 'Dovecot-Mailbox-Viewer-Linux-x86_64.AppImage')],
         }).encode())
         try:
             self.wfile.write(data)
@@ -71,6 +72,15 @@ class UpdateTests(unittest.TestCase):
                     self.assertEqual(results, [])
                     self.assertEqual(len(errors), 1)
                 checker.deleteLater()
+
+    def test_linux_requires_its_own_uploaded_download(self):
+        payload = {'tag_name': 'v0.5.0', 'assets': [
+            {'name': 'Dovecot-Mailbox-Viewer-Windows.exe', 'state': 'uploaded'}]}
+        self.assertEqual(release_version(payload, 'win32'), '0.5.0')
+        with self.assertRaises(ValueError):
+            release_version(payload, 'linux')
+        payload['assets'].append({'name': 'Dovecot-Mailbox-Viewer-Linux-x86_64.AppImage', 'state': 'uploaded'})
+        self.assertEqual(release_version(payload, 'linux'), '0.5.0')
 
     def test_cancel_does_not_report_a_spurious_failure(self):
         checker = UpdateChecker(endpoint=f'http://127.0.0.1:{self.server.server_port}/slow')

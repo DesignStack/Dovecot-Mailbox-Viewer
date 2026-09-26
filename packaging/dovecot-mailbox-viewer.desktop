@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Dovecot Mailbox Viewer
+Comment=Read and search Dovecot mailbox backups
+Exec=Dovecot-Mailbox-Viewer
+Icon=dovecot-mailbox-viewer
+Terminal=false
+Categories=Office;Email;
+StartupWMClass=Dovecot Mailbox Viewer

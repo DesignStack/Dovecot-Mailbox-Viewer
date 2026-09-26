@@ -28,10 +28,11 @@ def digest(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def download_source(url, destination):
+def download_source(url, destination, expected=None):
     """Verify the exact upstream archive against its published SHA-256."""
-    with urlopen(url + ".sha256", timeout=60) as response:
-        expected = response.read(4096).decode("ascii").split()[0].lower()
+    if expected is None:
+        with urlopen(url + ".sha256", timeout=60) as response:
+            expected = response.read(4096).decode("ascii").split()[0].lower()
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise ValueError("Invalid upstream source checksum")
     if not destination.exists() or digest(destination) != expected:
@@ -49,7 +50,7 @@ def copy_notices(archive, target):
     """Copy notice files only; never extract archive paths or links unchecked."""
     count = 0
     references = set()
-    with tarfile.open(archive, "r|xz") as source:
+    with tarfile.open(archive, "r|*") as source:
         for entry in source:
             path = PurePosixPath(entry.name)
             if not entry.isfile() or path.is_absolute() or ".." in path.parts:
@@ -83,7 +84,7 @@ def copy_notices(archive, target):
     missing = {name for name in references if not target.joinpath(*PurePosixPath(name).parts).is_file()}
     if missing:
         # A licence may be embedded in a header or other unusually named file.
-        with tarfile.open(archive, "r|xz") as source:
+        with tarfile.open(archive, "r|*") as source:
             for entry in source:
                 if entry.name not in missing or not entry.isfile() or entry.size > 8 * 1024 * 1024:
                     continue
@@ -163,7 +164,9 @@ def finalise():
     """Record the bundled file inventory and checksum every release asset."""
     import ast
     # PyInstaller's TOC is a Python literal, not executable code.
-    toc = ROOT / "build/Dovecot-Mailbox-Viewer-Windows/Analysis-00.toc"
+    linux = sys.platform.startswith("linux")
+    target = "Linux" if linux else "Windows"
+    toc = ROOT / f"build/Dovecot-Mailbox-Viewer-{target}/Analysis-00.toc"
     analysis = ast.literal_eval(toc.read_text(encoding="utf-8"))
     binaries = []
     def walk(value):
@@ -177,9 +180,13 @@ def finalise():
     if not binaries:
         raise ValueError("Bundled binary inventory is empty")
     output = ROOT / "dist"
-    (output / "Bundled-files.txt").write_text("\n".join(sorted(set(binaries))) + "\n", encoding="utf-8")
+    inventory = "Bundled-files-Linux.txt" if linux else "Bundled-files.txt"
+    (output / inventory).write_text("\n".join(sorted(set(binaries))) + "\n", encoding="utf-8")
     manifest = json.loads((ROOT / "build/notices/DEPENDENCIES.json").read_text(encoding="utf-8"))
-    names = ["Dovecot-Mailbox-Viewer-Windows.exe", "Third-party-notices.zip", "Bundled-files.txt"]
+    if linux:
+        (output / "Third-party-notices.zip").replace(output / "Third-party-notices-Linux.zip")
+    names = (["Dovecot-Mailbox-Viewer-Linux-x86_64.AppImage", "Third-party-notices-Linux.zip", inventory]
+             if linux else ["Dovecot-Mailbox-Viewer-Windows.exe", "Third-party-notices.zip", inventory])
     names += [item["file"] for item in manifest["sources"]]
     checksums = "".join(f"{digest(output / name)}  {name}\n" for name in names)
     (output / "SHA256SUMS.txt").write_text(checksums, encoding="ascii")

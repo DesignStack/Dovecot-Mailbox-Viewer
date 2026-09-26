@@ -3,4 +3,4 @@
 Use MAJOR.MINOR.PATCH and add release notes to CHANGELOG.md when changing this.
 """
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"

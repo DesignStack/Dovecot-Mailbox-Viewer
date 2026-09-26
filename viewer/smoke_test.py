@@ -7,6 +7,7 @@ SQLite support or dependencies accidentally left beside the executable.
 from pathlib import Path
 import gzip
 import json
+import platform
 import sys
 import tempfile
 import time
@@ -22,7 +23,7 @@ from viewer.exporting import export_messages
 
 def run(app, window_class, report_path: Path) -> int:
     report = {"version": __version__, "frozen": bool(getattr(sys, "frozen", False)),
-              "qt_version": qVersion(), "ok": False}
+              "qt_version": qVersion(), "platform": sys.platform, "machine": platform.machine(), "ok": False}
     window = window_class(show_welcome=False)
     try:
         with tempfile.TemporaryDirectory(prefix="mail-viewer-check-") as temporary:

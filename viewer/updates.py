@@ -1,6 +1,7 @@
 """User-initiated release checks. No account, mail content or file paths are sent."""
 import json
 import re
+import sys
 
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
@@ -21,15 +22,18 @@ def version_tuple(version):
     return tuple(int(part) for part in match.groups())
 
 
-def release_version(payload):
-    """Only advertise a stable numbered release with an uploaded Windows EXE."""
+def release_version(payload, platform=None):
+    """Only advertise a stable release with a download for this platform."""
+    platform = platform or sys.platform
+    filename = ('Dovecot-Mailbox-Viewer-Linux-x86_64.AppImage' if platform.startswith('linux')
+                else 'Dovecot-Mailbox-Viewer-Windows.exe')
     if not isinstance(payload, dict) or payload.get('draft') or payload.get('prerelease'):
         raise ValueError('No stable release was found.')
     tag = payload.get('tag_name', '')
     version_tuple(tag)
-    if not any(isinstance(asset, dict) and asset.get('name') == 'Dovecot-Mailbox-Viewer-Windows.exe'
+    if not any(isinstance(asset, dict) and asset.get('name') == filename
                and asset.get('state') == 'uploaded' for asset in payload.get('assets', [])):
-        raise ValueError('The latest release does not have a Windows download yet. Please try again later.')
+        raise ValueError('The latest release does not have a download for your platform yet. Please try again later.')
     return tag.lstrip('v')
 
 
@@ -140,7 +144,7 @@ class UpdateDialog(QDialog):
         self.retry.setEnabled(True)
         self.release = version
         newer = version_tuple(version) > version_tuple(__version__)
-        self.status.setText(f'Version {version} is available. Close the app before replacing your EXE.'
+        self.status.setText(f'Version {version} is available. Close the app before replacing your application file.'
                             if newer else f'You are up to date. Latest published version: {version}.')
         self.download.setEnabled(newer)
 

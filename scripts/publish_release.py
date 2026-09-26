@@ -37,15 +37,18 @@ def request(url, token, *, method="GET", data=None, content_type="application/js
 def verified_assets(root):
     """No partial or altered licence/source bundle may be published."""
     output = root / "dist"
-    with zipfile.ZipFile(output / "Third-party-notices.zip") as notices:
-        manifest = json.loads(notices.read("DEPENDENCIES.json"))
-    if manifest["application"] != __version__:
-        raise RuntimeError("The dependency manifest is for a different application version")
-    sources = manifest["sources"]
-    if len(sources) != 2 or not any(s["file"].startswith("qt-everywhere-src-") for s in sources) \
-            or not any(s["file"].startswith("pyside-setup-everywhere-src-") for s in sources):
-        raise RuntimeError("Both Qt and PySide/Shiboken source archives are required")
-    expected = {"Dovecot-Mailbox-Viewer-Windows.exe", "Third-party-notices.zip", "Bundled-files.txt"}
+    sources = []
+    for name in ("Third-party-notices.zip", "Third-party-notices-Linux.zip"):
+        with zipfile.ZipFile(output / name) as notices:
+            manifest = json.loads(notices.read("DEPENDENCIES.json"))
+        if manifest["application"] != __version__:
+            raise RuntimeError("The dependency manifest is for a different application version")
+        if not any(s["file"].startswith("qt-everywhere-src-") for s in manifest["sources"]) \
+                or not any(s["file"].startswith("pyside-setup-everywhere-src-") for s in manifest["sources"]):
+            raise RuntimeError("Both Qt and PySide/Shiboken source archives are required")
+        sources.extend(manifest["sources"])
+    expected = {"Dovecot-Mailbox-Viewer-Windows.exe", "Third-party-notices.zip", "Bundled-files.txt",
+                "Dovecot-Mailbox-Viewer-Linux-x86_64.AppImage", "Third-party-notices-Linux.zip", "Bundled-files-Linux.txt"}
     expected.update(item["file"] for item in sources)
     listed = {}
     for line in (output / "SHA256SUMS.txt").read_text(encoding="ascii").splitlines():
@@ -93,9 +96,10 @@ def publish():
     if release and release["target_commitish"] != commit:
         raise RuntimeError(f"An unfinished {tag} draft belongs to another commit; review it before publishing")
 
-    report = json.loads((ROOT / "build/smoke-test.json").read_text(encoding="utf-8"))
-    if not report.get("ok") or not report.get("frozen") or report.get("version") != __version__:
-        raise RuntimeError("A passing packaged-app check is required before publishing")
+    for platform in ("Windows", "Linux"):
+        report = json.loads((ROOT / f"build/smoke-test-{platform}.json").read_text(encoding="utf-8"))
+        if not report.get("ok") or not report.get("frozen") or report.get("version") != __version__:
+            raise RuntimeError(f"A passing {platform} packaged-app check is required before publishing")
     assets = verified_assets(ROOT)
 
     if release is None:
@@ -109,7 +113,8 @@ def publish():
         raise RuntimeError("Unexpected release upload URL")
     for path in assets:
         mime = {".exe": "application/vnd.microsoft.portable-executable", ".zip": "application/zip",
-                ".txt": "text/plain", ".xz": "application/x-xz"}[path.suffix]
+                ".txt": "text/plain", ".xz": "application/x-xz", ".gz": "application/gzip",
+                ".AppImage": "application/octet-stream"}[path.suffix]
         # Only incomplete drafts can reach this code; public assets are immutable here.
         for asset in release.get("assets", []):
             if asset["name"] == path.name:

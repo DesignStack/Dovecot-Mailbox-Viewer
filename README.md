@@ -2,7 +2,7 @@
 
 [MIT licence](LICENSE) · [Windows download](https://github.com/DesignStack/Dovecot-Mailbox-Viewer/releases/latest/download/Dovecot-Mailbox-Viewer-Windows.exe) · [DesignStack](https://designstack.co.uk)
 
-A local, read-only Windows desktop viewer for JetBackup/cPanel **mdbox** mail backups. Open a `.tar.gz` archive or the extracted `backup/email` directory. Mailbox content stays on your computer; the application makes a separate local cache for searching and previews.
+A local, read-only desktop viewer for Windows and Linux, for JetBackup/cPanel **mdbox** mail backups. Open a `.tar.gz` archive or the extracted `backup/email` directory. Mailbox content stays on your computer; the application makes a separate local cache for searching and previews.
 
 ## Download for Windows
 
@@ -37,6 +37,24 @@ From v0.4.1, **Help → Licences and third-party software** shows the licence te
 bundled inside the EXE. Releases also provide a notices ZIP, exact dependency
 versions and the matching Qt/PySide library source archives. These extra downloads
 are for licensing and rebuilding; you only need the EXE to use the viewer.
+
+## Download for Linux
+
+**[Download the Linux app (64-bit AppImage)](https://github.com/DesignStack/Dovecot-Mailbox-Viewer/releases/latest/download/Dovecot-Mailbox-Viewer-Linux-x86_64.AppImage)**
+
+For x86-64 Linux desktops, with glibc 2.35 or newer and X11/XWayland. The build
+is checked on Ubuntu 22.04, Ubuntu 24.04 and Debian 13. No Python installation is
+required. After downloading, enable **Allow executing file as program** in its
+file properties, then double-click it. Or run:
+
+```bash
+chmod +x Dovecot-Mailbox-Viewer-Linux-x86_64.AppImage
+./Dovecot-Mailbox-Viewer-Linux-x86_64.AppImage
+```
+
+If your environment prevents AppImages from mounting, run it with
+`--appimage-extract-and-run`. Read [Linux instructions](docs/linux.md) for the
+supported environment, building, updating and troubleshooting.
 
 ## Screenshots
 

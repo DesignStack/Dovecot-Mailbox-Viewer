@@ -9,10 +9,10 @@ The first numbered release is `0.1.0`; earlier builds were unversioned.
 2. Add a dated `## [x.y.z] - YYYY-MM-DD` section to `CHANGELOG.md` with the changes
    and known limitations. Keep an empty `Unreleased` section for upcoming work.
 3. Commit the code, version and changelog together to `main`.
-4. **Actions → Build Windows app** tests and builds a Windows x64 executable,
-   verifies its Windows version metadata and launches it from a clean folder.
-5. Only after those checks pass, the workflow creates `vx.y.z` and publishes a
-   GitHub Release with the EXE, SHA-256 checksum and notes from the changelog.
+4. **Actions → Build Windows and Linux apps** builds both packages and runs the
+   standalone checks, including clean Debian/Ubuntu AppImage checks.
+5. Only after all platform checks pass, the workflow creates `vx.y.z` and publishes a
+   GitHub Release with the EXE, AppImage, sources, notices, checksums and release notes.
 
 The workflow can also be run manually on `main`. If that version is already
 published, it leaves the release untouched. Build artifacts remain available
