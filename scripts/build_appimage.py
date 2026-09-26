@@ -67,7 +67,7 @@ def prepare():
     # Preserve the copyright notices for system libraries selected by the spec.
     copyrights = notices / 'Linux-system-libraries'
     copyrights.mkdir(exist_ok=True)
-    packages = {'libstdc++6', 'libgcc-s1', 'libxkbcommon-x11-0'}
+    packages = {'libstdc++6', 'libgcc-s1', 'libxkbcommon-x11-0', 'libsqlite3-0'}
     packages.update(path.name for path in Path('/usr/share/doc').glob('libxcb*')
                     if (path / 'copyright').is_file())
     for package in sorted(packages):
@@ -79,7 +79,7 @@ def prepare():
     for name in ('GPL-3', 'LGPL-2.1', 'LGPL-3'):
         shutil.copyfile(common / name, copyrights / f'{name}.txt')
     manifest['system_packages'] = subprocess.check_output(
-        ['dpkg-query', '-W', '-f=${Package}=${Version}\n', 'libstdc++6', 'libgcc-s1', 'libxcb*', 'libxkbcommon*'],
+        ['dpkg-query', '-W', '-f=${Package}=${Version}\n', 'libstdc++6', 'libgcc-s1', 'libxcb*', 'libxkbcommon*', 'libsqlite3-0'],
         text=True).splitlines()
     manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
     (notices / 'APPIMAGE-REBUILDING.txt').write_text(
@@ -94,6 +94,8 @@ def prepare():
 
 
 def package():
+    if not list((ROOT / 'dist/Dovecot-Mailbox-Viewer-Linux').rglob('libsqlite3.so*')):
+        raise RuntimeError('SQLite must be bundled for desktops without the system library')
     appdir = ROOT / 'build/Dovecot-Mailbox-Viewer.AppDir'
     if appdir.exists():
         shutil.rmtree(appdir)
