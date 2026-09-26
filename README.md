@@ -203,12 +203,27 @@ images stored inside the email are displayed locally. External links open only
 after confirmation. Qt's HTML renderer supports common email layouts, but
 complex CSS may look different from a browser.
 
-The progress bar shows how much of the selected mailbox's `m.*` storage has been
-processed, with a running message count. If an import fails, use **File → Open
-diagnostic log**. The log lives at
-`%LOCALAPPDATA%\DesignStack\DovecotMailboxViewer\viewer.log`; it records paths,
-counts and error details, but does not intentionally log email bodies. Check
-the log before sharing it, since file paths can contain account names.
+The progress bar measures the **current stage**. Compressed backups need separate
+passes to find mailboxes, read Dovecot status and index emails. Click **Progress
+details** for bytes read, elapsed time, speed and an estimated time remaining for
+that stage. Folder scans show a file count until the total is known. If work has
+not advanced for ten seconds, the app says so; a large email or slow disk can
+cause this without a crash. Emails appear during indexing: click one to read it.
+
+If the app freezes, allow around 35 seconds for an automatic thread trace before
+closing it. Reopen it and choose **Help → Save diagnostic report…**. The ZIP
+contains application logs, current/previous freeze traces and system versions.
+It does **not** include mailbox databases, email bodies or attachments. Logs can
+contain local paths or error details, so review the report before sharing it.
+Include the backup's size, whether it is on a local/USB/network drive, the stage
+where it stopped and whether you had clicked an email. A native file dialogue
+can also pause the heartbeat; a timeout trace alone does not prove a crash.
+
+**File → Open diagnostic log** still opens `viewer.log`. On Windows, logs live in
+`%LOCALAPPDATA%\DesignStack\DovecotMailboxViewer`; on Linux they normally live in
+`~/.cache/DesignStack/DovecotMailboxViewer`. No report is uploaded automatically.
+Unusually large or complex HTML uses a labelled simplified preview; `.eml`
+exports retain the complete original message.
 
 ## Build the Windows application
 

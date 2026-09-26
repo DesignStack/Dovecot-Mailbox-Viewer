@@ -5,6 +5,39 @@ with its own notes and Windows download. Earlier development builds were unversi
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-26
+
+### Fixed
+
+- Avoid reformatting every HTML text fragment at default zoom; batch other zoom
+  changes into a single document edit. Release old preview documents when switching mail.
+- Coalesce live import updates so slow rendering cannot queue stale list refreshes.
+  During indexing, select an email to open it; new arrivals do not open themselves.
+- Keep conversation sorting away from raw message blobs, add date-sort indexes,
+  and use a read-only GUI database connection while importing.
+- Use a clearly labelled, bounded text preview for unusually large or complex HTML.
+  Original emails and exports remain intact.
+
+### Added
+
+- Measured progress for compressed archive passes, including bytes read, elapsed
+  time, speed and estimated time remaining for the current stage. Folder scans
+  show counts until their total is known. Progress details explain each stage.
+- A visible notice when no measurable work has advanced, plus periodic activity logs.
+- Native crash logging and automatic thread traces after a 30-second GUI heartbeat
+  gap. Help → Save diagnostic report bundles logs and system versions, never mail caches.
+- Regression tests for skipped archive bytes, cancellation, live catalogue reads,
+  long imports, HTML preview limits and diagnostic-bundle contents.
+
+### Known limitations
+
+- The reported large-backup freeze has not yet been reproduced with the original
+  mailbox. If it persists, the diagnostic report can identify the blocking operation.
+- Progress percentages describe individual stages, not the entire import. A stage
+  can finish reading bytes before its processing/commit is complete.
+- Native file dialogues can also pause the GUI heartbeat. Logs can contain local
+  paths and should be reviewed before sharing.
+
 ## [0.5.0] - 2026-09-26
 
 ### Added
@@ -181,3 +214,4 @@ with its own notes and Windows download. Earlier development builds were unversi
   have unknown status flags or ambiguous folder placement.
 - Complex HTML email styling may differ from a browser.
 - One-file startup unpacks support files into a temporary folder automatically.
+

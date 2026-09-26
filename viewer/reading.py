@@ -103,6 +103,7 @@ class ReadingMixin:
         self.preview.display(html if html and self.html_button.isChecked() else
             f"<pre style='white-space:pre-wrap'>{escape(plain or html_to_text(html) or '(No readable text body)')}</pre>", msg)
         self._font_runs = []
+        self._zoom = 100
         block = self.preview.document().begin()
         while block.isValid():
             iterator = block.begin()
@@ -122,7 +123,10 @@ class ReadingMixin:
         target = self.preferences['zoom']
         # Scale each original font so headings and explicit HTML pixel sizes
         # keep their proportions. Keep original runs to avoid rounding drift.
-        for position, length, original in getattr(self, '_font_runs', []):
+        edit = QTextCursor(self.preview.document())
+        edit.beginEditBlock()
+        runs = getattr(self, '_font_runs', []) if target != self._zoom else []
+        for position, length, original in runs:
             font = QFont(original)
             if font.pixelSize() > 0:
                 font.setPixelSize(max(1, round(font.pixelSize() * target / 100)))
@@ -134,6 +138,7 @@ class ReadingMixin:
             format = QTextCharFormat()
             format.setFont(font)
             cursor.mergeCharFormat(format)
+        edit.endEditBlock()
         self._zoom = target
         self.zoom_button.setToolTip(f'Zoom · {target}%')
         self.zoom_button.setAccessibleDescription(f'Current text zoom {target}%')
@@ -317,3 +322,4 @@ class ReadingMixin:
         CacheDialog(root, current, self.close_mailbox, self).exec()
         if self.catalogue is None:
             self._show_empty_page()
+

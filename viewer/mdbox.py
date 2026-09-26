@@ -39,16 +39,18 @@ def _account_name(root: tuple[str, ...]) -> str:
     return f"{root[-1]}@{root[-2]}" if len(root) >= 2 else "/".join(root)
 
 
-def discover(path: Path, check=lambda: None) -> dict[str, dict]:
+def discover(path: Path, check=lambda: None, progress=None) -> dict[str, dict]:
     """Scan paths off the GUI thread, sequentially for compressed archives."""
     if path.is_dir():
         def entries():
-            for p in path.rglob("*"):
+            for number, p in enumerate(path.rglob("*"), 1):
+                if progress:
+                    progress(number, 0, unit="paths")
                 check()
                 if p.is_file() or p.is_dir():
                     yield tuple(p.relative_to(path).parts), str(p), p.is_dir(), p.stat().st_size
         return _discover_entries(entries())
-    with path.open('rb') as raw, tarfile.open(fileobj=CheckedReader(raw, check), mode='r|gz') as tf:
+    with path.open('rb') as raw, tarfile.open(fileobj=CheckedReader(raw, check, progress, path.stat().st_size), mode='r|gz') as tf:
         return _discover_entries((tuple(PurePosixPath(m.name).parts), m.name, m.isdir(), m.size)
                                  for m in tf if m.isfile() or m.isdir())
 
@@ -116,7 +118,17 @@ def records(stream, source: str, check=lambda: None):
         length = int(match[2], 16)
         if not 0 < length <= MAX_RECORD:
             raise ValueError(f"{source}: invalid record length {length}")
-        payload = stream.read(length)
+        chunks = []
+        remaining = length
+        while remaining:
+            check()
+            chunk = stream.read(min(remaining, 1024 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        del chunks
         if len(payload) != length:
             raise ValueError(f"{source}: truncated message")
         raw = _decode_payload(payload, source)
@@ -137,7 +149,7 @@ def records(stream, source: str, check=lambda: None):
         yield Record(attributes.get(b"B") or "Unfiled", raw, source, guid=guid)
 
 
-def read_account(path: Path, info: dict, check=lambda: None):
+def read_account(path: Path, info: dict, check=lambda: None, progress=None):
     """Read tar members in physical order to avoid repeated gzip decompression."""
     completed = 0
     if path.is_dir():
@@ -146,17 +158,22 @@ def read_account(path: Path, info: dict, check=lambda: None):
             check()
             with open(name, "rb") as stream:
                 for record in records(stream, name, check):
+                    if progress:
+                        progress(completed + stream.tell(), total, detail=Path(name).name)
                     yield replace(record, bytes_done=completed + stream.tell(), bytes_total=total)
             completed += Path(name).stat().st_size
     else:
         names = set(info['storage'])
         total = sum(info.get('sizes', {}).values())
-        with path.open('rb') as raw, tarfile.open(fileobj=CheckedReader(raw, check), mode='r|gz') as tf:
+        with path.open('rb') as raw, tarfile.open(fileobj=CheckedReader(raw, check, progress, path.stat().st_size), mode='r|gz') as tf:
             for member in tf:
                 check()
                 if not member.isfile() or member.name not in names:
                     continue
+                if progress:
+                    progress(detail=PurePosixPath(member.name).name)
                 with tf.extractfile(member) as stream:
                     for record in records(stream, member.name, check):
                         yield replace(record, bytes_done=completed + stream.tell(), bytes_total=max(total, member.size))
                 completed += member.size
+

@@ -4,7 +4,9 @@ from pathlib import Path
 from email.utils import parseaddr
 import sys
 import logging
-from logging.handlers import RotatingFileHandler
+import time
+from viewer.diagnostics import log_path, configure_logging, start_watchdog, save_diagnostics
+from viewer.progress import format_progress
 
 from PySide6.QtCore import QTimer, Slot, Qt, QUrl, QSize, QLocale, QDate
 from PySide6.QtGui import QAction, QDesktopServices
@@ -35,26 +37,6 @@ from viewer.catalog import SORTS
 from viewer.list_controls import MessageListHeader
 from viewer.date_groups import date_group, message_date_label
 from viewer.licensing import show_licences
-
-
-def log_path() -> Path:
-    """Keep diagnostic logs separate from the source mailbox backup."""
-    return cache_path(Path("diagnostics"), "app").parent / "viewer.log"
-
-
-def configure_logging():
-    target = log_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    handler = RotatingFileHandler(target, maxBytes=2_000_000, backupCount=2, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    logging.getLogger("viewer").addHandler(handler)
-    logging.getLogger("viewer").setLevel(logging.INFO)
-    logging.getLogger("viewer").info("Dovecot Mailbox Viewer %s starting (%s)",
-                                     __version__, "portable" if getattr(sys, "frozen", False) else "source")
-    def log_uncaught(exc_type, exc_value, exc_traceback):
-        logging.getLogger("viewer").error("Unhandled application error", exc_info=(exc_type, exc_value, exc_traceback))
-        sys.__excepthook__(exc_type, exc_value, exc_traceback)
-    sys.excepthook = log_uncaught
 
 
 def app_icon():
@@ -137,6 +119,12 @@ class Window(ReadingMixin, QMainWindow):
         self.export_worker = None
         self.export_progress = None
         self.update_dialog = None
+        self.last_import_activity = None
+        self._shown_import_count = 0
+        self._last_import_refresh = 0
+        self.import_timer = QTimer(self)
+        self.import_timer.setInterval(500)
+        self.import_timer.timeout.connect(self.poll_import)
         self.setAcceptDrops(True)
 
         # Avoid a blanket QWidget background: it paints white rectangles behind
@@ -248,6 +236,7 @@ class Window(ReadingMixin, QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction("Settings…", self.show_settings)
         help_menu = self.menuBar().addMenu("Help")
+        help_menu.addAction("Save diagnostic report…", self.export_diagnostics)
         self.getting_started_action = QAction(line_icon("mail"), "Getting started…", self)
         self.getting_started_action.triggered.connect(self.show_welcome)
         help_menu.addAction(self.getting_started_action)
@@ -450,16 +439,23 @@ class Window(ReadingMixin, QMainWindow):
         outer.addWidget(self.content_stack, 1)
         self.setCentralWidget(container)
         self.activity = QLabel("Ready")
+        self.activity.setMaximumWidth(520)
         self.activity.setStyleSheet("color: #8a929d; font-size: 11px; padding: 0 8px;")
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(False)
-        self.progress_bar.setFixedSize(140, 6)
+        self.progress_bar.setFixedSize(160, 12)
         self.progress_bar.hide()
         self.cancel_open = QPushButton("Cancel opening")
         self.cancel_open.clicked.connect(self.cancel_import)
         self.cancel_open.hide()
+        self.import_details = QToolButton()
+        self.import_details.setText("Progress details")
+        self.import_details.clicked.connect(self.show_import_details)
+        self.import_details.hide()
+        self.progress_dialog = None
+        self.statusBar().addPermanentWidget(self.import_details)
         self.statusBar().addPermanentWidget(self.cancel_open)
         self.statusBar().addPermanentWidget(self.activity)
         self.statusBar().addPermanentWidget(self.progress_bar)
@@ -727,8 +723,7 @@ class Window(ReadingMixin, QMainWindow):
         worker.phase.connect(self.open_phase)
         worker.choose_account.connect(self.choose_account)
         worker.prepared.connect(self.account_prepared)
-        worker.progress.connect(self.update_progress)
-        worker.batch.connect(self.import_batch)
+        # Poll the latest committed count; slow rendering cannot build a queue of stale batches.
         worker.completed.connect(self.import_done)
         worker.cancelled.connect(self.import_cancelled)
         worker.failed.connect(self.import_failed)
@@ -740,6 +735,11 @@ class Window(ReadingMixin, QMainWindow):
         self.cancel_open.show()
         if self.welcome_dialog is not None:
             self.welcome_dialog.accept()
+        self._shown_import_count = 0
+        self._last_import_refresh = 0
+        self.last_import_activity = None
+        self.import_details.show()
+        self.import_timer.start()
         worker.start()
         return True
 
@@ -763,7 +763,8 @@ class Window(ReadingMixin, QMainWindow):
     def open_phase(self, text):
         self.activity.setText(text)
         self.statusBar().showMessage(text)
-        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
         self.progress_bar.show()
 
     def cancel_import(self):
@@ -772,8 +773,76 @@ class Window(ReadingMixin, QMainWindow):
             self.cancel_open.setEnabled(False)
             self.activity.setText("Stopping…")
 
+    def poll_import(self):
+        if self.worker is None:
+            return
+        self.worker.activity.update()  # Write a heartbeat even during a long operation.
+        snapshot = self.worker.activity.snapshot()
+        self.last_import_activity = snapshot
+        percent, detail, short = format_progress(snapshot)
+        self.activity.setText(("Stopping · " if self.worker.cancellation.event.is_set() else "") + short)
+        self.activity.setToolTip(detail)
+        # Unknown totals stay empty; an animation is not evidence of progress.
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(percent or 0)
+        self.progress_bar.setToolTip(detail)
+        if self.progress_dialog is not None:
+            self.progress_detail_text.setText(detail)
+        now = time.monotonic()
+        available = snapshot['available']
+        if available != self._shown_import_count and now - self._last_import_refresh >= 1:
+            self._last_import_refresh = now
+            self.import_batch(available)
+
+    def show_import_details(self):
+        if self.progress_dialog is None:
+            self.progress_dialog = QDialog(self)
+            self.progress_dialog.setWindowTitle('Opening backup — progress')
+            self.progress_dialog.resize(550, 310)
+            layout = QVBoxLayout(self.progress_dialog)
+            self.progress_detail_text = QLabel()
+            self.progress_detail_text.setTextFormat(Qt.TextFormat.PlainText)
+            self.progress_detail_text.setWordWrap(True)
+            self.progress_detail_text.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            layout.addWidget(self.progress_detail_text)
+            note = QLabel('Percentages and time remaining apply to the current stage. '
+                          'Compressed backups require separate discovery, status and email-reading passes.')
+            note.setWordWrap(True)
+            layout.addWidget(note)
+            buttons = QHBoxLayout()
+            save = QPushButton('Save diagnostic report…')
+            save.clicked.connect(self.export_diagnostics)
+            buttons.addWidget(save)
+            close = QPushButton('Close')
+            close.clicked.connect(self.progress_dialog.hide)
+            buttons.addWidget(close)
+            layout.addLayout(buttons)
+        if self.worker is None:
+            self.progress_detail_text.setText(self.activity.text())
+        elif self.last_import_activity:
+            self.progress_detail_text.setText(format_progress(self.last_import_activity)[1])
+        self.progress_dialog.show()
+        self.progress_dialog.raise_()
+
+    def export_diagnostics(self):
+        destination, _ = QFileDialog.getSaveFileName(self, 'Save diagnostic report',
+            'Dovecot-Mailbox-Viewer-diagnostics.zip', 'Diagnostic report (*.zip)')
+        if not destination or not self.allowed_destination(destination):
+            return
+        try:
+            save_diagnostics(destination, activity=self.last_import_activity)
+            QMessageBox.information(self, 'Diagnostic report saved',
+                'The report contains application logs, thread traces and system versions. '
+                'It does not include your mailbox or attachments. Logs can contain local paths; '
+                'please review them before sharing.\n\n' + destination)
+        except OSError as exc:
+            QMessageBox.warning(self, 'Cannot save report', str(exc))
+
     @Slot(int)
     def import_cancelled(self, count):
+        self.import_timer.stop()
+        if count:
+            self.import_batch(count)
         self.activity.setText(f"Stopped · {count} messages available · reopen to rebuild the full index")
         self.statusBar().showMessage(self.activity.text())
 
@@ -782,6 +851,7 @@ class Window(ReadingMixin, QMainWindow):
         worker = self.worker_thread
         self.worker = self.worker_thread = None
         worker.deleteLater()
+        self.import_timer.stop()
         self.progress_bar.hide()
         self.cancel_open.hide()
         self.update_export_actions()
@@ -802,18 +872,24 @@ class Window(ReadingMixin, QMainWindow):
     @Slot(int)
     def import_batch(self, count):
         if self.catalogue is None:
-            self.catalogue = Catalogue(self.pending_database)
+            self.catalogue = Catalogue(self.pending_database, readonly=True)
         self.populate_folders(count)
+        self._shown_import_count = count
 
     @Slot(int, bool)
     def import_done(self, count, cached=False):
+        self.import_timer.stop()
+        if self.worker is not None:
+            self.last_import_activity = self.worker.activity.snapshot()
         self.import_incomplete = False
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
         self.progress_bar.hide()
         self.activity.setText(f"Ready · {count} messages" + (" (cached)" if cached else " indexed"))
+        if self.progress_dialog is not None:
+            self.progress_detail_text.setText(self.activity.text())
         if self.catalogue is None:
-            self.catalogue = Catalogue(self.pending_database)
+            self.catalogue = Catalogue(self.pending_database, readonly=True)
         self.populate_folders(count)
         if self.source is not None and self.preferences['remember_recent']:
             self.recent_backups.remember(self.source, self.account_name)
@@ -821,6 +897,7 @@ class Window(ReadingMixin, QMainWindow):
 
     def populate_folders(self, count):
         self.content_stack.setCurrentWidget(self.panes)
+        count = self.catalogue.count()
         current = self.folders.currentItem()
         selected = current.data(Qt.ItemDataRole.UserRole) if current else None
         self.folders.blockSignals(True)
@@ -848,6 +925,9 @@ class Window(ReadingMixin, QMainWindow):
 
     @Slot(str)
     def import_failed(self, error):
+        if self.worker is not None:
+            self.last_import_activity = self.worker.activity.snapshot()
+        self.import_timer.stop()
         self.progress_bar.hide()
         self.activity.setText("Import failed · see File → Open diagnostic log")
         self.heading.setText("Unable to index this backup")
@@ -920,7 +1000,7 @@ class Window(ReadingMixin, QMainWindow):
                 if self.listing.item(index).data(Qt.ItemDataRole.UserRole) == selected_id:
                     self.listing.setCurrentRow(index)
                     break
-        if self.listing.currentItem() is None and rows:
+        if self.listing.currentItem() is None and rows and not self.import_incomplete:
             self.listing.setCurrentRow(0)
         surviving = [self.listing.item(index) for index in range(self.listing.count())
                      if self.listing.item(index).data(Qt.ItemDataRole.UserRole) in selected_ids]
@@ -935,7 +1015,10 @@ class Window(ReadingMixin, QMainWindow):
         self.page_label.setText(f"{self.page_offset+1 if rows else 0}–{self.page_offset+len(rows)} of {total:,}")
         self.previous_page.setEnabled(self.page_offset > 0)
         self.next_page.setEnabled(self.page_offset + len(rows) < total)
-        self.show_message()
+        if not self.import_incomplete or self.listing.currentItem() is not None:
+            self.show_message()
+        elif self.shown_message is None:
+            self.heading.setText("Choose an email to read while indexing continues")
         self.update_export_actions()
         self.highlight_matches()
         self.statusBar().showMessage(f"Showing {self.page_label.text()} " +
@@ -957,6 +1040,7 @@ class Window(ReadingMixin, QMainWindow):
         # New batches must not discard the reader's scroll or image consent.
         if ident == self.shown_message:
             return
+        logging.getLogger("viewer").info("Opening preview: local message id=%s", ident)
         row = self.catalogue.message(ident)
         if row is None:
             self.reset_preview()
@@ -982,6 +1066,7 @@ class Window(ReadingMixin, QMainWindow):
         self.export_action.setEnabled(True)
         self.pdf_action.setEnabled(True)
         self.print_action.setEnabled(True)
+        logging.getLogger("viewer").info("Preview ready: local message id=%s raw_bytes=%s", ident, len(row["raw"]))
 
     def update_export_actions(self):
         count = len(self.listing.selectedItems()) if self.catalogue else 0
@@ -1200,6 +1285,9 @@ class Window(ReadingMixin, QMainWindow):
         self.mailbox_name.setText("Mailboxes")
         self.source_label.setText("Open a mailbox backup to get started")
         self.activity.setText("Ready")
+        self.import_details.hide()
+        if self.progress_dialog is not None:
+            self.progress_dialog.hide()
 
     def clear_cache(self):
         if self.worker_thread is not None or self.export_worker is not None:
@@ -1241,6 +1329,7 @@ class Window(ReadingMixin, QMainWindow):
 def main():
     configure_logging()
     app = QApplication(sys.argv)
+    start_watchdog(app)
     app.setApplicationName("Dovecot Mailbox Viewer")
     app.setApplicationVersion(__version__)
     app.setWindowIcon(app_icon())

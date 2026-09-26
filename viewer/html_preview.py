@@ -1,6 +1,7 @@
 """Render email HTML locally; fetch images only after the user's explicit click."""
 from email.message import Message
 from html.parser import HTMLParser
+from html import escape
 import logging
 
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QTimer, QUrl, Signal
@@ -8,11 +9,44 @@ from PySide6.QtGui import QDesktopServices, QImage, QImageReader, QTextDocument
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import QMessageBox, QTextBrowser
 from viewer.version import __version__
+from viewer.catalog import html_to_text
 
 MAX_IMAGE_BYTES = 5_000_000
 MAX_IMAGES = 30
 IMAGE_DEADLINE_MS = 20_000
 LOGGER = logging.getLogger("viewer")
+MAX_PREVIEW_CHARS = 500_000
+
+
+class PreviewComplexity(HTMLParser):
+    """Keep pathological table layouts out of Qt's synchronous text renderer."""
+    def __init__(self):
+        super().__init__()
+        self.tags = self.cells = self.depth = self.max_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        self.tags += 1
+        self.cells += tag in ('td', 'th')
+        if tag == 'table':
+            self.depth += 1
+            self.max_depth = max(self.max_depth, self.depth)
+
+    def handle_endtag(self, tag):
+        if tag == 'table':
+            self.depth = max(0, self.depth - 1)
+
+
+def preview_html(html):
+    parser = PreviewComplexity()
+    parser.feed(html[:MAX_PREVIEW_CHARS])
+    if (len(html) <= MAX_PREVIEW_CHARS and parser.tags <= 10_000
+            and parser.cells <= 2000 and parser.max_depth <= 10):
+        return html, False
+    # Only the preview is shortened. Search and .eml export retain the original.
+    plain = html_to_text(html[:MAX_PREVIEW_CHARS])[:200_000]
+    return ("<p style='background:#fff4d5;padding:10px'>Simplified preview: this email's HTML "
+            "is unusually large or complex. Export the original .eml to view its full layout.</p>"
+            "<pre style='white-space:pre-wrap'>" + escape(plain) + '</pre>'), True
 
 
 def resource_key(url) -> str:
@@ -92,6 +126,9 @@ class SafeHtmlPreview(QTextBrowser):
         for reply in tuple(self.active_replies):
             reply.abort()
         self.active_replies.clear()
+        html, simplified = preview_html(html)
+        if simplified:
+            LOGGER.warning('Using simplified HTML preview (size/layout limit)')
         self.html_content = html
         self.local_images = {}
         self.remote_images = {}
@@ -111,7 +148,14 @@ class SafeHtmlPreview(QTextBrowser):
         document = QTextDocument(self)
         document.setDefaultFont(self.font())
         document.setDocumentMargin(24)
+        previous = self.document()
         self.setDocument(document)
+        # Documents explicitly parented to the browser otherwise survive every
+        # message switch, retaining their text, layout and decoded image cache.
+        try:
+            previous.deleteLater()
+        except RuntimeError:
+            pass  # Qt already deleted its initial, internally owned document.
         self.setHtml(html)
         self.images_changed.emit()
 

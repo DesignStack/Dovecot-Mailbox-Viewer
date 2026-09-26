@@ -43,7 +43,7 @@ class OpeningTests(unittest.TestCase):
 
     def test_discovery_is_off_thread_and_cancellable_before_mail_appears(self):
         entered = threading.Event()
-        def discovery(path, check):
+        def discovery(path, check, **kwargs):
             entered.set()
             while True:
                 check()
@@ -62,7 +62,7 @@ class OpeningTests(unittest.TestCase):
         timer.stop()
 
     def test_partial_messages_are_readable_cancellation_is_incomplete_and_reopen_rebuilds(self):
-        def records(path, info, check):
+        def records(path, info, check, **kwargs):
             yield mail('First available')
             while True:
                 check()
@@ -70,6 +70,8 @@ class OpeningTests(unittest.TestCase):
         with patch('viewer.importing.read_account', records):
             self.w.open_source(self.archive)
             self.wait(lambda: self.w.catalogue is not None)
+            self.assertIsNone(self.w.shown_message)
+            self.w.listing.setCurrentRow(0)
             self.assertEqual(self.w.heading.text(), 'First available')
             self.assertIsNotNone(self.w.worker_thread)
             self.w.cancel_import()
@@ -101,3 +103,4 @@ class OpeningTests(unittest.TestCase):
         self.w.open_source(self.folder)
         self.wait(lambda: self.w.worker_thread is None)
         self.assertNotIn('cached', self.w.activity.text())
+

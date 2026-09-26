@@ -211,7 +211,7 @@ def parse_folder(files):
     return state.statuses()
 
 
-def read_statuses(source: Path, info: dict, check=lambda: None):
+def read_statuses(source: Path, info: dict, check=lambda: None, progress=None):
     """Join GUIDs to folder state; never guess for duplicate GUIDs or bad indexes."""
     root = tuple(info['root']) + ('mailboxes',)
     wanted = {'dovecot.index', 'dovecot.index.log', 'dovecot.index.log.2'}
@@ -231,19 +231,23 @@ def read_statuses(source: Path, info: dict, check=lambda: None):
         folders.setdefault(folder, {})[parts[-1]] = read()
 
     if source.is_dir():
-        for path in (source / Path(*root)).rglob('dovecot.index*'):
+        for number, path in enumerate((source / Path(*root)).rglob('dovecot.index*'), 1):
+            if progress:
+                progress(number, 0, unit='indexes')
             check()
             if path.is_file():
                 accept(path.relative_to(source).as_posix(), path.stat().st_size, path.read_bytes)
     else:
-        with source.open('rb') as raw, tarfile.open(fileobj=CheckedReader(raw, check), mode='r|gz') as archive:
+        with source.open('rb') as raw, tarfile.open(fileobj=CheckedReader(raw, check, progress, source.stat().st_size), mode='r|gz') as archive:
             for member in archive:
                 check()
                 if member.isfile():
                     accept(member.name, member.size, lambda: archive.extractfile(member).read())
     result, ambiguous = {}, set()
-    for folder, files in folders.items():
+    for number, (folder, files) in enumerate(folders.items(), 1):
         check()
+        if progress:
+            progress(detail=f"Interpreting folder index {number} of {len(folders)}")
         if folder in unreadable:
             continue
         try:
@@ -254,3 +258,4 @@ def read_statuses(source: Path, info: dict, check=lambda: None):
         except ValueError as exc:
             logging.getLogger('viewer').warning('Cannot interpret folder indexes (%s): %s', folder, exc)
     return {guid: status for guid, status in result.items() if guid not in ambiguous}
+

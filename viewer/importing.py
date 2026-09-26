@@ -9,6 +9,7 @@ from viewer.catalog import Catalogue, cache_path, source_fingerprint
 from viewer.mdbox import discover, read_account
 from viewer.dovecot_index import read_statuses
 from viewer.operations import Cancellation, Cancelled
+from viewer.progress import ImportProgress
 
 
 class OpenWorker(QThread):
@@ -29,6 +30,11 @@ class OpenWorker(QThread):
         self.choice_ready = threading.Event()
         self.account = ''
         self.cache_factory = cache_path
+        self.activity = ImportProgress()
+
+    def set_phase(self, text):
+        self.activity.phase(text)
+        self.phase.emit(text)
 
     def cancel(self):
         self.cancellation.cancel()
@@ -63,14 +69,17 @@ class OpenWorker(QThread):
         count = 0
         check = self.cancellation.check
         try:
-            self.phase.emit('Checking for a saved index…')
+            logging.getLogger("viewer").info("Opening backup: type=%s archive_bytes=%s",
+                "folder" if self.source.is_dir() else "archive",
+                self.source.stat().st_size if self.source.is_file() else "unknown")
+            self.set_phase('Checking for a saved index…')
             info = self._cached_info()
             check()
             if info:
                 self.account = self.preferred_account
             else:
-                self.phase.emit('Finding mailboxes in your backup…')
-                accounts = discover(self.source, check)
+                self.set_phase('Finding mailboxes in your backup…')
+                accounts = discover(self.source, check, progress=self.activity.update)
                 check()
                 if not accounts:
                     raise ValueError('No supported mailbox was found. Choose a JetBackup/cPanel .tar.gz backup '
@@ -78,21 +87,24 @@ class OpenWorker(QThread):
                 if len(accounts) == 1:
                     self.account = next(iter(accounts))
                 else:
-                    self.phase.emit('Choose a mailbox to open…')
+                    self.set_phase('Choose a mailbox to open…')
                     self.choose_account.emit(sorted(accounts))
                     while not self.choice_ready.wait(0.1):
                         check()
                     check()
                 info = accounts[self.account]
             database = self.cache_factory(self.source, self.account)
-            self.phase.emit('Checking the backup for changes…')
-            fingerprint = source_fingerprint(self.source, info, check)
+            self.set_phase('Checking the backup for changes…')
+            fingerprint = source_fingerprint(self.source, info, check, progress=self.activity.update)
             catalogue = Catalogue(database)
             if catalogue.reusable(fingerprint):
                 check()
+                self.activity.update(available=catalogue.count(), messages=catalogue.count())
+                logging.getLogger("viewer").info("Reusing complete index: %d messages", catalogue.count())
                 self.prepared.emit(self.account, str(database))
                 self.completed.emit(catalogue.count(), True)
                 return
+            self.set_phase("Preparing the local search index…")
             catalogue.reset()
             for folder in sorted(info['folders']):
                 catalogue.add_folder(folder)
@@ -100,28 +112,33 @@ class OpenWorker(QThread):
                 ('source', str(self.source.resolve())), ('account', self.account), ('complete', '0')])
             catalogue.commit()
             self.prepared.emit(self.account, str(database))
-            self.phase.emit('Reading Dovecot folder and message status…')
-            statuses = read_statuses(self.source, info, check)
-            self.phase.emit('Reading emails · you can browse as they appear…')
+            self.set_phase('Reading Dovecot folder and message status…')
+            statuses = read_statuses(self.source, info, check, progress=self.activity.update)
+            self.set_phase('Reading emails · you can browse as they appear…')
             last_commit = time.monotonic()
             last_update = 0
-            for record in read_account(self.source, info, check):
+            for record in read_account(self.source, info, check, progress=self.activity.update):
                 check()
                 match = statuses.get(record.guid) if record.guid else None
+                self.activity.update(detail=f"Processing email {count + 1:,} ({len(record.raw):,} bytes)")
                 catalogue.add(record, match[1] if match else None,
                               folder=match[0] if match else None)
                 count += 1
+                self.activity.update(messages=count)
                 now = time.monotonic()
                 if now - last_update >= 0.15:
                     self.progress.emit(min(99, int(100 * record.bytes_done / max(1, record.bytes_total))), count)
                     last_update = now
                 if count == 1 or now - last_commit >= 0.5:
                     catalogue.commit()
+                    self.activity.update(available=count)
                     self.batch.emit(count)
                     last_commit = now
             check()
+            self.set_phase("Finishing the search index…")
             catalogue.finish(fingerprint, source=str(self.source.resolve()), account=self.account,
                              source_info=json.dumps(info, default=lambda value: sorted(value)))
+            self.activity.update(available=count)
             self.batch.emit(count)
             self.completed.emit(count, False)
             logging.getLogger('viewer').info('Import complete: %d messages', count)
@@ -130,6 +147,8 @@ class OpenWorker(QThread):
                 catalogue.commit()
                 if count:
                     self.batch.emit(count)
+            self.activity.update(available=count)
+            logging.getLogger("viewer").info("Import cancelled: %d messages", count)
             self.cancelled.emit(count)
         except Exception as exc:
             logging.getLogger('viewer').exception('Cannot open mailbox')
@@ -137,3 +156,4 @@ class OpenWorker(QThread):
         finally:
             if catalogue is not None:
                 catalogue.close()
+

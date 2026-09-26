@@ -81,8 +81,15 @@ def describe(raw: bytes):
 
 
 class Catalogue:
-    def __init__(self, file: Path):
+    def __init__(self, file: Path, *, readonly=False):
         self.path = file
+        if readonly:
+            # Never migrate or acquire a writer lock from the GUI. WAL exposes
+            # only committed rows while the import connection keeps writing.
+            self.conn = sqlite3.connect(file.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.1, isolation_level=None)
+            self.conn.row_factory = sqlite3.Row
+            self.conn.execute("PRAGMA query_only=ON")
+            return
         file.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(file)
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -113,6 +120,10 @@ class Catalogue:
             CREATE INDEX IF NOT EXISTS messages_thread ON messages(thread_key);
             CREATE INDEX IF NOT EXISTS messages_folder ON messages(folder);
             CREATE INDEX IF NOT EXISTS thread_groups ON thread_nodes(thread_key);
+            CREATE INDEX IF NOT EXISTS messages_newest ON messages(sent_timestamp IS NULL, sent_timestamp DESC, id DESC);
+            CREATE INDEX IF NOT EXISTS messages_oldest ON messages(sent_timestamp IS NULL, sent_timestamp ASC, id DESC);
+            CREATE INDEX IF NOT EXISTS messages_sender ON messages(sender_sort, id DESC);
+            CREATE INDEX IF NOT EXISTS messages_subject ON messages(subject_sort, id DESC);
         """)
 
     def reset(self):
@@ -232,7 +243,7 @@ class Catalogue:
         order = ("sent_timestamp IS NULL, " if sort.startswith('date_') else '') + order + ", id DESC"
         columns = "id, folder, sender, subject, date, substr(body,1,500) AS body, has_attachment, status, expunged, thread_key, sent_timestamp"
         if conversations:
-            sql = f"""WITH matches AS (SELECT *,
+            sql = f"""WITH matches AS (SELECT {columns}, sender_sort, subject_sort,
                 row_number() OVER (PARTITION BY coalesce(thread_key,'local:'||id)
                     ORDER BY sent_timestamp IS NULL, sent_timestamp DESC, id DESC) AS position,
                 count(*) OVER (PARTITION BY coalesce(thread_key,'local:'||id)) AS thread_count
@@ -262,17 +273,20 @@ def cache_path(source: Path, account: str):
     return root / f"{key}.sqlite3"
 
 
-def source_fingerprint(source: Path, info: dict, check=lambda: None) -> str:
+def source_fingerprint(source: Path, info: dict, check=lambda: None, progress=None) -> str:
     """Fast source identity; folder index changes invalidate the cache too."""
     if source.is_file():
         stat = source.stat()
         files = [(str(source.resolve()), stat.st_size, stat.st_mtime_ns)]
     else:
         files = []
-        for p in source.rglob('*'):
+        for number, p in enumerate(source.rglob('*'), 1):
             check()
+            if progress:
+                progress(number, 0, unit='paths')
             if p.is_file():
                 stat = p.stat()
                 files.append((str(p.relative_to(source)), stat.st_size, stat.st_mtime_ns))
         files.sort()
     return hashlib.sha256(json.dumps([SCHEMA_VERSION, info['root'], files]).encode()).hexdigest()
+

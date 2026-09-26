@@ -20,9 +20,15 @@ class Cancellation:
 
 class CheckedReader:
     """Check cancellation during tarfile's decompression/skip reads too."""
-    def __init__(self, stream, check):
+    def __init__(self, stream, check, progress=None, total=0):
         self.stream, self.check = stream, check
+        self.progress, self.total, self.done = progress, total, 0
 
     def read(self, size=-1):
         self.check()
-        return self.stream.read(size)
+        data = self.stream.read(size)
+        self.done += len(data)
+        if self.progress:
+            self.progress(self.done, self.total)
+        return data
+
