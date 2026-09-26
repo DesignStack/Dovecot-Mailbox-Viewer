@@ -48,8 +48,16 @@ def prepare() -> None:
              "For Windows 10/11 (64-bit). Startup can take a few seconds while bundled files unpack "
              "automatically. Your original backup stays unchanged.\n\n"
              + section.group(1).strip() + "\n\n"
-             "`SHA256SUMS.txt` contains the download checksum. "
-             "GitHub's Source code downloads are for developers.\n")
+             "`SHA256SUMS.txt` contains checksums for all release assets. "
+             "Only the EXE is needed to run the app.\n\n"
+             "**Third-party software:** Qt and PySide/Shiboken are used under LGPLv3. "
+             "`Third-party-notices.zip` contains licence texts, exact dependency versions "
+             "and rebuild instructions; these notices are also available inside the app "
+             "under **Help → Licences and third-party software**. "
+             "The matching, unmodified Qt and PySide/Shiboken source archives are the "
+             "separate `*-src-*.tar.xz` downloads below. `Bundled-files.txt` lists native files. "
+             "You may modify/rebuild these libraries and run the app with your replacements. "
+             "GitHub's Source code downloads contain the MIT-licensed application source.\n")
     (output / "release-notes.md").write_text(notes, encoding="utf-8")
     print(__version__)
 

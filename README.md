@@ -33,6 +33,11 @@ Check the installed version in **Help → About** or the EXE's Windows **Propert
 → Details**. Each release also includes `SHA256SUMS.txt` for checking its download.
 The **Source code** ZIP links on release pages are for developers.
 
+From v0.4.1, **Help → Licences and third-party software** shows the licence texts
+bundled inside the EXE. Releases also provide a notices ZIP, exact dependency
+versions and the matching Qt/PySide library source archives. These extra downloads
+are for licensing and rebuilding; you only need the EXE to use the viewer.
+
 ## Screenshots
 
 **Welcome guide** — open a backup archive, choose an extracted folder or reopen a recent backup.

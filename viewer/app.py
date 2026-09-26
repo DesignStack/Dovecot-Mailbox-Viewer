@@ -34,6 +34,7 @@ from viewer.preferences import read_preferences, write_preferences
 from viewer.catalog import SORTS
 from viewer.list_controls import MessageListHeader
 from viewer.date_groups import date_group, message_date_label
+from viewer.licensing import show_licences
 
 
 def log_path() -> Path:
@@ -259,6 +260,7 @@ class Window(ReadingMixin, QMainWindow):
         self.about_action = QAction(line_icon("info"), "About", self)
         self.about_action.triggered.connect(self.show_about)
         help_menu.addActions([self.contact_action, self.about_action])
+        help_menu.addAction("Licences and third-party software…", lambda: show_licences(self))
         search_action = QAction("Search mail…", self)
         search_action.setShortcut("Ctrl+F")
         search_action.triggered.connect(self.show_search)
@@ -619,6 +621,10 @@ class Window(ReadingMixin, QMainWindow):
                                       Qt.TextInteractionFlag.LinksAccessibleByKeyboard)
         credit.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
         layout.addWidget(credit)
+        licensing = QLabel("Original application: MIT licence. Uses Qt and PySide/Shiboken under LGPLv3. "
+                           "See Help → Licences and third-party software for the full notices and source details.")
+        licensing.setWordWrap(True)
+        layout.addWidget(licensing)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)

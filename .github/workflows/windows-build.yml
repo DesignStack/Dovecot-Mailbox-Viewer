@@ -16,7 +16,7 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
@@ -38,6 +38,9 @@ jobs:
           path: |
             dist/Dovecot-Mailbox-Viewer-Windows.exe
             dist/SHA256SUMS.txt
+            dist/Third-party-notices.zip
+            dist/Bundled-files.txt
+            dist/*-src-*.tar.xz
           compression-level: 0
           if-no-files-found: error
       - name: Publish new version to GitHub Releases

@@ -13,8 +13,11 @@ if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
 if ($LASTEXITCODE -ne 0) { throw "Tests failed; build stopped" }
 $appVersion = & $python scripts\prepare_release.py
 if ($LASTEXITCODE -ne 0) { throw "Release metadata validation failed" }
+& $python scripts\release_assets.py prepare
+if ($LASTEXITCODE -ne 0) { throw "Dependency notices/source preparation failed" }
 & $python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx `
     --name 'Dovecot-Mailbox-Viewer-Windows' --icon assets\mailbox.ico `
+    --add-data 'dist/Third-party-notices.zip:notices' `
     --version-file build\windows-version.txt --paths . viewer\app.py
 if ($LASTEXITCODE -ne 0) { throw "Application build failed" }
 
@@ -54,7 +57,7 @@ try {
     Remove-Item -Path $checkDir -Recurse -Force
 }
 
-$hash = (Get-FileHash -Path $output -Algorithm SHA256).Hash.ToLowerInvariant()
-"$hash  Dovecot-Mailbox-Viewer-Windows.exe" | Set-Content -Encoding ascii dist\SHA256SUMS.txt
+& $python scripts\release_assets.py finalise
+if ($LASTEXITCODE -ne 0) { throw "Release asset checksums failed" }
 if ($env:GITHUB_OUTPUT) { "version=$appVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8 }
 Write-Host "Windows application v$appVersion ready: $output"

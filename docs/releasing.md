@@ -25,6 +25,13 @@ record bundled versions, and fulfil the corresponding-source and rebuild/replace
 requirements of the LGPL components. Adding a licence to this repository does not
 retroactively add those materials to an already published executable.
 
+From v0.4.1, `scripts/release_assets.py` verifies upstream source checksums,
+embeds notices in the EXE and prepares the matching Qt and PySide/Shiboken source
+archives as separate release assets. It records exact versions and the native
+file inventory. The publisher checks all asset hashes and uploads every file to
+the draft before making it public. Allow additional download time and disk space
+for Qt's full source archive (around 1 GB). See [rebuilding](rebuilding.md).
+
 Uploads happen in a draft release. If uploading fails, rerun the failed workflow
 for the same commit to resume that draft. A draft from a different commit must
 be reviewed before publishing; the script deliberately stops in that case.

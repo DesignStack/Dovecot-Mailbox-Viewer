@@ -1,6 +1,6 @@
 """Publish tested Windows binaries from Actions, without replacing public releases.
 
-Create a draft first, upload both files, then make the release public. A failed
+Create a draft first, upload every verified asset, then make the release public. A failed
 upload leaves a draft which the same commit can safely resume on a workflow retry.
 The short-lived Actions token is used only here and never written to disk.
 """
@@ -13,6 +13,8 @@ import hashlib
 import json
 import os
 import sys
+import zipfile
+from contextlib import nullcontext
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -20,12 +22,47 @@ from viewer.version import __version__
 
 
 def request(url, token, *, method="GET", data=None, content_type="application/json"):
-    payload = json.dumps(data).encode() if isinstance(data, dict) else data
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
                "Content-Type": content_type, "User-Agent": "Dovecot-Mailbox-Viewer-release"}
-    with urlopen(Request(url, data=payload, headers=headers, method=method), timeout=120) as response:
-        body = response.read()
-        return json.loads(body) if body else None
+    # Stream large source archives; do not read a gigabyte into memory per upload.
+    if isinstance(data, Path):
+        headers["Content-Length"] = str(data.stat().st_size)
+    payload = json.dumps(data).encode() if isinstance(data, dict) else data
+    with data.open("rb") if isinstance(data, Path) else nullcontext(payload) as body:
+        with urlopen(Request(url, data=body, headers=headers, method=method), timeout=300) as response:
+            result = response.read()
+            return json.loads(result) if result else None
+
+
+def verified_assets(root):
+    """No partial or altered licence/source bundle may be published."""
+    output = root / "dist"
+    with zipfile.ZipFile(output / "Third-party-notices.zip") as notices:
+        manifest = json.loads(notices.read("DEPENDENCIES.json"))
+    if manifest["application"] != __version__:
+        raise RuntimeError("The dependency manifest is for a different application version")
+    sources = manifest["sources"]
+    if len(sources) != 2 or not any(s["file"].startswith("qt-everywhere-src-") for s in sources) \
+            or not any(s["file"].startswith("pyside-setup-everywhere-src-") for s in sources):
+        raise RuntimeError("Both Qt and PySide/Shiboken source archives are required")
+    expected = {"Dovecot-Mailbox-Viewer-Windows.exe", "Third-party-notices.zip", "Bundled-files.txt"}
+    expected.update(item["file"] for item in sources)
+    listed = {}
+    for line in (output / "SHA256SUMS.txt").read_text(encoding="ascii").splitlines():
+        checksum, filename = line.split("  ", 1)
+        if filename in listed or Path(filename).name != filename or "/" in filename or "\\" in filename:
+            raise RuntimeError("Invalid or duplicate release asset name")
+        listed[filename] = checksum
+    if set(listed) != expected:
+        raise RuntimeError("Release assets do not match the required checksums")
+    for filename, checksum in listed.items():
+        with (output / filename).open("rb") as stream:
+            actual = hashlib.file_digest(stream, "sha256").hexdigest()
+        if actual != checksum:
+            raise RuntimeError(f"Release checksum mismatch: {filename}")
+    if any(listed[source["file"]] != source["sha256"] for source in sources):
+        raise RuntimeError("Library source differs from its verified upstream archive")
+    return [output / filename for filename in listed] + [output / "SHA256SUMS.txt"]
 
 
 def publish():
@@ -56,14 +93,10 @@ def publish():
     if release and release["target_commitish"] != commit:
         raise RuntimeError(f"An unfinished {tag} draft belongs to another commit; review it before publishing")
 
-    executable = ROOT / "dist/Dovecot-Mailbox-Viewer-Windows.exe"
-    checksums = ROOT / "dist/SHA256SUMS.txt"
     report = json.loads((ROOT / "build/smoke-test.json").read_text(encoding="utf-8"))
     if not report.get("ok") or not report.get("frozen") or report.get("version") != __version__:
         raise RuntimeError("A passing packaged-app check is required before publishing")
-    digest = hashlib.sha256(executable.read_bytes()).hexdigest()
-    if checksums.read_text(encoding="ascii").strip() != f"{digest}  {executable.name}":
-        raise RuntimeError("The executable no longer matches its checksum")
+    assets = verified_assets(ROOT)
 
     if release is None:
         release = request(f"{api}/releases", token, method="POST", data={
@@ -74,14 +107,15 @@ def publish():
     upload_url = release["upload_url"].split("{", 1)[0]
     if not upload_url.startswith(f"https://uploads.github.com/repos/{repository}/releases/"):
         raise RuntimeError("Unexpected release upload URL")
-    for path, mime in ((executable, "application/vnd.microsoft.portable-executable"),
-                       (checksums, "text/plain")):
+    for path in assets:
+        mime = {".exe": "application/vnd.microsoft.portable-executable", ".zip": "application/zip",
+                ".txt": "text/plain", ".xz": "application/x-xz"}[path.suffix]
         # Only incomplete drafts can reach this code; public assets are immutable here.
         for asset in release.get("assets", []):
             if asset["name"] == path.name:
                 request(f"{api}/releases/assets/{asset['id']}", token, method="DELETE")
         request(f"{upload_url}?name={quote(path.name)}", token, method="POST",
-                data=path.read_bytes(), content_type=mime)
+                data=path, content_type=mime)
     published = request(f"{api}/releases/{release['id']}", token, method="PATCH",
                         data={"draft": False, "make_latest": "true"})
     print(f"Published {published['html_url']}")

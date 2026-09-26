@@ -20,6 +20,12 @@ licence texts and acknowledgements supplied with the exact versions distributed.
 This table is an overview, not a replacement for those texts or a complete
 inventory of a particular executable.
 
+Releases from v0.4.1 include a `Third-party-notices.zip` with exact component
+versions and upstream notices, also accessible from the EXE's Help menu.
+Complete, unmodified Qt and PySide/Shiboken source archives are separate assets
+on the same release page. `SHA256SUMS.txt` covers them and `Bundled-files.txt`
+lists the packaged native files. See [rebuilding instructions](docs/rebuilding.md).
+
 ## Building and redistributing
 
 The repository contains the application source and `build-windows.ps1`, which

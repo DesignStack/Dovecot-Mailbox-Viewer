@@ -5,6 +5,8 @@ with its own notes and Windows download. Earlier development builds were unversi
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-26
+
 ### Fixed
 
 - Open uncompressed Dovecot mdbox messages without a manual decompression bypass.
@@ -19,6 +21,14 @@ with its own notes and Windows download. Earlier development builds were unversi
 - Synthetic regressions for mixed-compression storage in folders and `.tar.gz`
   backups, byte-preserving MIME handling and invalid gzip streams. The packaged
   Windows check now imports, searches and exports both message formats.
+- Embedded licence viewer under Help, exact dependency versions, third-party
+  notices and matching Qt/PySide library source downloads alongside the EXE.
+
+### Known limitations
+
+- Debian 13 instructions are community-tested; the automated packaged build
+  remains Windows-only. The forum member's actual mailbox has not been supplied
+  for validation. Other message compression codecs remain unsupported.
 
 ## [0.4.0] - 2026-09-25
 

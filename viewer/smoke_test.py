@@ -10,6 +10,7 @@ import json
 import sys
 import tempfile
 import time
+import zipfile
 
 from PySide6.QtCore import qVersion
 from PySide6.QtNetwork import QSslSocket
@@ -45,6 +46,14 @@ def run(app, window_class, report_path: Path) -> int:
             app.processEvents()
             assert window.welcome_dialog.isVisible(), "Welcome guide did not open"
             assert not window.windowIcon().isNull(), "Application icon is missing"
+            if getattr(sys, "frozen", False):
+                from viewer.licensing import notice_bundle
+                with zipfile.ZipFile(notice_bundle()) as notices:
+                    assert b"MIT License" in notices.read("LICENSE"), "Application licence is missing"
+                    assert b"LGPLv3" in notices.read("README.txt"), "LGPL notice is missing"
+                    assert any(n.endswith("/LGPL-3.0-only.txt") for n in notices.namelist()), "LGPL text is missing"
+                    assert json.loads(notices.read("DEPENDENCIES.json"))["application"] == __version__, \
+                        "Dependency manifest version is incorrect"
             assert QSslSocket.supportsSsl(), "Qt TLS backend is missing"
             assert window.open_source(root), "Synthetic backup could not be opened"
             deadline = time.monotonic() + 20
